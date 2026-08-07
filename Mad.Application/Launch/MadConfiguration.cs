@@ -2,11 +2,11 @@ namespace Mad.Launch;
 
 public sealed class MadConfiguration
 {
-    public required string DiscordToken { get; init; }
+    public string DiscordToken { get; init; } = "";
 
-    public required string DatabasePath { get; init; } = "MadDatabase.sqlite";
+    public string DatabasePath { get; init; } = "MadDatabase.sqlite";
 
-    public required string SentryDsn { get; init; }
+    public string? SentryDsn { get; init; }
 
     public bool Debug { get; init; }
 

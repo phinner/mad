@@ -18,8 +18,11 @@ internal sealed class DeletionRuleHostedService(
     private const string AuditLogReason = "Mad automated message deletion rule";
     private static readonly TimeSpan RunInterval = TimeSpan.FromMinutes(1);
 
+    private volatile bool _clientEverReady;
+
     protected override async Task ExecuteAsync(CancellationToken cancellationToken)
     {
+        client.Ready += SignalClientReadyAsync;
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -29,10 +32,26 @@ internal sealed class DeletionRuleHostedService(
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        finally
+        {
+            client.Ready -= SignalClientReadyAsync;
+        }
+    }
+
+    private Task SignalClientReadyAsync()
+    {
+        _clientEverReady = true;
+        return Task.CompletedTask;
     }
 
     private async Task DeleteEligibleMessagesAsync(CancellationToken cancellationToken)
     {
+        if (!_clientEverReady || client.ConnectionState != ConnectionState.Connected)
+        {
+            logger.LogDebug("Skipping deletion run; the Discord client is not connected.");
+            return;
+        }
+
         var transaction = SentrySdk.StartTransaction("deletion-rule-job", "job.deletion");
         SentrySdk.ConfigureScope(scope => scope.Transaction = transaction);
         try
@@ -87,6 +106,19 @@ internal sealed class DeletionRuleHostedService(
                     guildId,
                     deletedRules
                 );
+                return;
+            }
+
+            if (!guild.IsConnected)
+            {
+                span.Status = SpanStatus.Unavailable;
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    logger.LogDebug(
+                        "Skipping guild {GuildId}; it is currently unavailable.",
+                        guildId
+                    );
+                }
                 return;
             }
 
@@ -171,7 +203,12 @@ internal sealed class DeletionRuleHostedService(
             var now = DateTimeOffset.UtcNow;
             var bulkDeletionThreshold = now.AddDays(-14);
             var requestOptions = new RequestOptions { CancelToken = cancellationToken };
+            var newestEligible = SnowflakeUtils.ToSnowflake(
+                now - rules.Min(rule => rule.OlderThan)
+            );
             var messageChunks = channel.GetMessagesAsync(
+                newestEligible,
+                Direction.Before,
                 int.MaxValue,
                 CacheMode.AllowDownload,
                 requestOptions
@@ -184,6 +221,11 @@ internal sealed class DeletionRuleHostedService(
                     if (message.CreatedAt <= bulkDeletionThreshold)
                     {
                         return EvaluatorResult.Stop;
+                    }
+
+                    if (message.IsPinned)
+                    {
+                        return EvaluatorResult.Skip;
                     }
 
                     var userType = GetUserType(message.Author);

@@ -9,6 +9,9 @@ namespace Mad.Rule;
 
 public sealed class DeletionRuleService(MadDbContext db, MadConfiguration configuration)
 {
+    public const int MinNameLength = 3;
+    public const int MaxNameLength = 64;
+
     public async Task<Result> CreateAsync(
         ulong guildId,
         string name,
@@ -19,6 +22,10 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
     )
     {
         name = NormalizeName(name);
+        if (name.Length is < MinNameLength or > MaxNameLength)
+        {
+            return new Result.InvalidName(MinNameLength, MaxNameLength);
+        }
 
         await using var transaction = await db.Database.BeginTransactionAsync(
             IsolationLevel.Serializable,
@@ -140,13 +147,15 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
         return deletedRows > 0;
     }
 
-    private static string NormalizeName(string name) => name.Trim().ToLowerInvariant();
+    public static string NormalizeName(string name) => name.Trim().ToLowerInvariant();
 
     public abstract record Result
     {
         private Result() { }
 
         public sealed record Success : Result;
+
+        public sealed record InvalidName(int MinLength, int MaxLength) : Result;
 
         public sealed record ChannelLimit(int Value) : Result;
 

@@ -34,13 +34,7 @@ public sealed class DeletionRuleInteractionModule(DeletionRuleService rules)
 
         await DeferAsync(ephemeral: true);
 
-        name = name.Trim().ToLowerInvariant();
-        if (name.Length is < 3 or > 64)
-        {
-            await FollowupAsync("Rule names must be between 3 and 64 characters.", ephemeral: true);
-            return;
-        }
-
+        name = DeletionRuleService.NormalizeName(name);
         if (
             olderThan < MinimumOlderThan
             || olderThan > MaximumOlderThan
@@ -66,6 +60,12 @@ public sealed class DeletionRuleInteractionModule(DeletionRuleService rules)
         {
             case DeletionRuleService.Result.Success:
                 break;
+            case DeletionRuleService.Result.InvalidName(var minLength, var maxLength):
+                await FollowupAsync(
+                    $"Rule names must be between {minLength} and {maxLength} characters.",
+                    ephemeral: true
+                );
+                return;
             case DeletionRuleService.Result.ChannelLimit(var value):
                 await FollowupAsync(
                     $"{channel.Mention} has reached its limit of {value} deletion rules.",
@@ -126,7 +126,7 @@ public sealed class DeletionRuleInteractionModule(DeletionRuleService rules)
         }
 
         await DeferAsync(ephemeral: true);
-        name = name.Trim().ToLowerInvariant();
+        name = DeletionRuleService.NormalizeName(name);
         var deleted = await rules.DeleteAsync(guildId.Value, name);
         await FollowupAsync(
             deleted ? $"Deleted rule `{name}`." : $"No rule named `{name}` exists in this server.",

@@ -21,8 +21,7 @@ internal sealed class DiscordHostedService(
     {
         client.Log += LogAsync;
         interactions.Log += LogAsync;
-        interactions.InteractionExecuted += InteractionExecutedAsync;
-        client.InteractionCreated += ExecuteInteractionAsync;
+        client.InteractionCreated += OnInteractionCreatedAsync;
         await interactions.AddModulesAsync(Assembly.GetExecutingAssembly(), services);
 
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -68,12 +67,19 @@ internal sealed class DiscordHostedService(
     public async Task StopAsync(CancellationToken cancellation)
     {
         logger.LogInformation("Stopping Discord client.");
-        client.InteractionCreated -= ExecuteInteractionAsync;
+        client.InteractionCreated -= OnInteractionCreatedAsync;
         client.Log -= LogAsync;
         interactions.Log -= LogAsync;
-        interactions.InteractionExecuted -= InteractionExecutedAsync;
         await client.StopAsync();
         await client.LogoutAsync();
+    }
+
+    private Task OnInteractionCreatedAsync(SocketInteraction interaction)
+    {
+        // Commands run with RunMode.Sync; hop off the gateway task so command
+        // execution (database and REST calls) never blocks heartbeats.
+        _ = Task.Run(() => ExecuteInteractionAsync(interaction));
+        return Task.CompletedTask;
     }
 
     private async Task ExecuteInteractionAsync(SocketInteraction interaction)
@@ -161,26 +167,6 @@ internal sealed class DiscordHostedService(
             options = subCommand.Options;
         }
         return name;
-    }
-
-    private async Task InteractionExecutedAsync(
-        ICommandInfo command,
-        IInteractionContext context,
-        IResult result
-    )
-    {
-        if (result.IsSuccess)
-        {
-            return;
-        }
-
-        logger.LogWarning(
-            "Interaction {InteractionId} for command {CommandName} failed: {Error}",
-            context.Interaction.Id,
-            command.Name,
-            result.ErrorReason
-        );
-        await SendFailureResponseAsync(context.Interaction);
     }
 
     private async Task SendFailureResponseAsync(IDiscordInteraction interaction)

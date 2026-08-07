@@ -4,7 +4,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace Mad.Database;
 
-internal sealed class MadDdHostedService(IServiceScopeFactory scopeFactory) : IHostedService
+internal sealed class MadDbHostedService(IServiceScopeFactory scopeFactory) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {

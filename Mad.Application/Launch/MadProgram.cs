@@ -79,7 +79,9 @@ internal static class MadProgram
             serviceProvider.GetRequiredService<DiscordSocketClient>(),
             new InteractionServiceConfig
             {
-                DefaultRunMode = RunMode.Async,
+                // Sync so ExecuteCommandAsync surfaces the real result; DiscordHostedService
+                // offloads each interaction to the thread pool to keep the gateway task free.
+                DefaultRunMode = RunMode.Sync,
                 AutoServiceScopes = true,
             }
         ));
@@ -95,7 +97,7 @@ internal static class MadProgram
         );
         builder.Services.AddScoped<DeletionRuleService>();
 
-        builder.Services.AddHostedService<MadDdHostedService>();
+        builder.Services.AddHostedService<MadDbHostedService>();
         builder.Services.AddHostedService<DeletionRuleHostedService>();
         builder.Services.AddHostedService<DiscordHostedService>();
 
