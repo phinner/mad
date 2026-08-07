@@ -1,6 +1,6 @@
 # M.A.D
 
-Message Auto Delete, a small Discord bot that deletes messages satisfying defined rules.
+Message Auto Delete, a small Discord bot that automatically deletes messages with user defined rules.
 
 ## Installation
 
@@ -14,9 +14,9 @@ Message Auto Delete, a small Discord bot that deletes messages satisfying define
 
 ## Configuration
 
-Mad reads `MadConfig.json` and environment variables prefixed with `MAD_`. Copy
-`MadConfig.example.json` to `MadConfig.json` to start with a safe local configuration;
-`MadConfig.json` is ignored by Git because it contains the bot token.
+Mad reads `MadConfig.json` and environment variables prefixed with `MAD_` (eg: `MAD_DiscordToken`).
+
+Copy `MadConfig.example.json` to `MadConfig.json` to start with a safe local configuration.
 
 ```json
 {
@@ -28,19 +28,6 @@ Mad reads `MadConfig.json` and environment variables prefixed with `MAD_`. Copy
   "MaxRulesPerGuild": 20
 }
 ```
-
-The equivalent environment variables are:
-
-```sh
-export MAD_DiscordToken="your-bot-token"
-export MAD_DatabasePath="./mad.db"
-export MAD_Debug="true"
-export MAD_ManagerGuild="123456789012345678"
-export MAD_MaxRulesPerChannel="1"
-export MAD_MaxRulesPerGuild="20"
-```
-
-`MaxRulesPerChannel` defaults to `1`, and `MaxRulesPerGuild` defaults to `20`.
 
 ## Running
 
@@ -61,4 +48,4 @@ dotnet build Mad.slnx --configuration Release
 - `/rule list` lists rules.
 - `/rule delete` removes a rule by name.
 
-Members need the **Manage Messages** permission to use `/rule create` and `/rule delete`.
+Members need the **Manage Messages** permission to use these commands.
