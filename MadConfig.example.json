@@ -1,0 +1,8 @@
+{
+  "DiscordToken": "your-bot-token",
+  "DatabasePath": "./mad.db",
+  "Debug": false,
+  "ManagerGuild": null,
+  "MaxRulesPerChannel": 1,
+  "MaxRulesPerGuild": 20
+}

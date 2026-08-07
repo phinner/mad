@@ -1,0 +1,178 @@
+using System.Reflection;
+using Discord;
+using Discord.Interactions;
+using Discord.WebSocket;
+using Mad.Launch;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace Mad.Discord;
+
+internal sealed class DiscordHostedService(
+    DiscordSocketClient client,
+    InteractionService interactions,
+    IServiceProvider services,
+    MadConfiguration configuration,
+    ILogger<DiscordHostedService> logger
+) : IHostedService
+{
+    public async Task StartAsync(CancellationToken cancellation)
+    {
+        client.Log += LogAsync;
+        interactions.Log += LogAsync;
+        interactions.InteractionExecuted += InteractionExecutedAsync;
+        client.InteractionCreated += ExecuteInteractionAsync;
+        await interactions.AddModulesAsync(Assembly.GetExecutingAssembly(), services);
+
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        client.Ready += SignalReadyAsync;
+        try
+        {
+            await client.LoginAsync(TokenType.Bot, configuration.DiscordToken);
+            await client.StartAsync();
+            await ready.Task.WaitAsync(cancellation);
+        }
+        finally
+        {
+            client.Ready -= SignalReadyAsync;
+        }
+
+        if (configuration.Debug)
+        {
+            await interactions.RegisterCommandsToGuildAsync(configuration.ManagerGuild!.Value);
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Discord commands registered to manager guild {GuildId}.",
+                    configuration.ManagerGuild
+                );
+            }
+        }
+        else
+        {
+            await interactions.RegisterCommandsGloballyAsync();
+            logger.LogInformation("Discord commands registered globally.");
+        }
+        logger.LogInformation("Discord client started.");
+        return;
+
+        Task SignalReadyAsync()
+        {
+            ready.TrySetResult();
+            return Task.CompletedTask;
+        }
+    }
+
+    public async Task StopAsync(CancellationToken cancellation)
+    {
+        logger.LogInformation("Stopping Discord client.");
+        client.InteractionCreated -= ExecuteInteractionAsync;
+        client.Log -= LogAsync;
+        interactions.Log -= LogAsync;
+        interactions.InteractionExecuted -= InteractionExecutedAsync;
+        await client.StopAsync();
+        await client.LogoutAsync();
+    }
+
+    private async Task ExecuteInteractionAsync(SocketInteraction interaction)
+    {
+        logger.LogInformation(
+            "Received Discord interaction {InteractionId} of type {InteractionType}.",
+            interaction.Id,
+            interaction.Type
+        );
+
+        try
+        {
+            var context = new SocketInteractionContext(client, interaction);
+            var result = await interactions.ExecuteCommandAsync(context, services);
+
+            if (result.IsSuccess)
+            {
+                return;
+            }
+
+            logger.LogWarning(
+                "Interaction {InteractionId} failed: {Error}",
+                interaction.Id,
+                result.ErrorReason
+            );
+
+            await SendFailureResponseAsync(interaction);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Interaction {InteractionId} threw.", interaction.Id);
+            await SendFailureResponseAsync(interaction);
+        }
+    }
+
+    private async Task InteractionExecutedAsync(
+        ICommandInfo command,
+        IInteractionContext context,
+        IResult result
+    )
+    {
+        if (result.IsSuccess)
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "Interaction {InteractionId} for command {CommandName} failed: {Error}",
+            context.Interaction.Id,
+            command.Name,
+            result.ErrorReason
+        );
+        await SendFailureResponseAsync(context.Interaction);
+    }
+
+    private async Task SendFailureResponseAsync(IDiscordInteraction interaction)
+    {
+        try
+        {
+            if (interaction.HasResponded)
+            {
+                await interaction.FollowupAsync(
+                    "This interaction could not be completed.",
+                    ephemeral: true
+                );
+            }
+            else
+            {
+                await interaction.RespondAsync(
+                    "This interaction could not be completed.",
+                    ephemeral: true
+                );
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "Could not send the failure response for interaction {InteractionId}.",
+                interaction.Id
+            );
+        }
+    }
+
+    private Task LogAsync(LogMessage message)
+    {
+        var level = message.Severity switch
+        {
+            LogSeverity.Critical => LogLevel.Critical,
+            LogSeverity.Error => LogLevel.Error,
+            LogSeverity.Warning => LogLevel.Warning,
+            LogSeverity.Info => LogLevel.Information,
+            LogSeverity.Verbose => LogLevel.Debug,
+            LogSeverity.Debug => LogLevel.Trace,
+            _ => throw new ArgumentOutOfRangeException(nameof(message), message.Severity, null),
+        };
+        if (logger.IsEnabled(level))
+        {
+            logger.Log(level, message.Exception, "Discord.Net: {Message}", message.Message);
+        }
+        return Task.CompletedTask;
+    }
+}

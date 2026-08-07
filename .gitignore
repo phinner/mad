@@ -1,0 +1,20 @@
+# .NET build output
+**/[Bb]in/
+**/[Oo]bj/
+artifacts/
+*.binlog
+
+# Local configuration and data
+.env
+MadConfig.json
+*.sqlite*
+*.db
+*.db-*
+
+# IDE and user files
+.idea/
+*.DotSettings.user
+
+## OS Specific
+.DS_Store
+Thumbs.db
