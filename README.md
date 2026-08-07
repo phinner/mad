@@ -42,6 +42,8 @@ For a release build:
 dotnet build Mad.slnx --configuration Release
 ```
 
+The container image stores its SQLite database at `/data/MadDatabase.sqlite`. Mount a persistent volume at `/data`.
+
 ## Commands
 
 - `/rule create` creates a deletion rule.
