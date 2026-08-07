@@ -98,6 +98,7 @@ public sealed class DeletionRuleInteractionModule(DeletionRuleService rules)
         );
     }
 
+    [RequireUserPermission(GuildPermission.ManageMessages)]
     [SlashCommand("list", "List message deletion rules.")]
     public async Task ListRules(
         [Summary("channel", "Only show rules for this text channel.")] ITextChannel? channel = null
