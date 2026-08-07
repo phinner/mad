@@ -15,7 +15,7 @@ internal sealed class MadDbHostedService(IServiceScopeFactory scopeFactory) : IH
         try
         {
             await database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", cancellationToken);
-            await database.EnsureCreatedAsync(cancellationToken);
+            await database.MigrateAsync(cancellationToken);
         }
         finally
         {

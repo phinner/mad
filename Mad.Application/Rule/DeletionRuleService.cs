@@ -131,8 +131,13 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
             .DeletionRules.Where(rule => rule.GuildId == guildId && rule.ChannelId == channelId)
             .ExecuteDeleteAsync(cancellationToken);
 
-    public Task<int> DeleteByGuildAsync(ulong guildId, CancellationToken cancellationToken = default) =>
-        db.DeletionRules.Where(rule => rule.GuildId == guildId).ExecuteDeleteAsync(cancellationToken);
+    public Task<int> DeleteByGuildAsync(
+        ulong guildId,
+        CancellationToken cancellationToken = default
+    ) =>
+        db
+            .DeletionRules.Where(rule => rule.GuildId == guildId)
+            .ExecuteDeleteAsync(cancellationToken);
 
     public async Task<bool> DeleteAsync(
         ulong guildId,
