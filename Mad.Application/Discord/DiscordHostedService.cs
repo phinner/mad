@@ -5,6 +5,7 @@ using Discord.WebSocket;
 using Mad.Launch;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Sentry;
 
 namespace Mad.Discord;
 
@@ -77,11 +78,29 @@ internal sealed class DiscordHostedService(
 
     private async Task ExecuteInteractionAsync(SocketInteraction interaction)
     {
-        logger.LogInformation(
-            "Received Discord interaction {InteractionId} of type {InteractionType}.",
-            interaction.Id,
-            interaction.Type
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Received Discord interaction {InteractionId} of type {InteractionType}.",
+                interaction.Id,
+                interaction.Type
+            );
+        }
+
+        var transaction = SentrySdk.StartTransaction(
+            GetTransactionName(interaction),
+            "discord.interaction"
         );
+        transaction.SetTag("discord.interaction_type", interaction.Type.ToString());
+        if (interaction.GuildId is { } guildId)
+        {
+            transaction.SetTag("discord.guild_id", guildId.ToString());
+        }
+        if (interaction.ChannelId is { } channelId)
+        {
+            transaction.SetTag("discord.channel_id", channelId.ToString());
+        }
+        SentrySdk.ConfigureScope(scope => scope.Transaction = transaction);
 
         try
         {
@@ -90,9 +109,11 @@ internal sealed class DiscordHostedService(
 
             if (result.IsSuccess)
             {
+                transaction.Status = SpanStatus.Ok;
                 return;
             }
 
+            transaction.Status = SpanStatus.UnknownError;
             logger.LogWarning(
                 "Interaction {InteractionId} failed: {Error}",
                 interaction.Id,
@@ -103,9 +124,43 @@ internal sealed class DiscordHostedService(
         }
         catch (Exception exception)
         {
+            transaction.Status = SpanStatus.InternalError;
             logger.LogError(exception, "Interaction {InteractionId} threw.", interaction.Id);
             await SendFailureResponseAsync(interaction);
         }
+        finally
+        {
+            transaction.Finish();
+        }
+    }
+
+    private static string GetTransactionName(SocketInteraction interaction) =>
+        interaction switch
+        {
+            SocketSlashCommand slash => GetSlashCommandName(slash),
+            SocketCommandBase command => $"/{command.CommandName}",
+            SocketMessageComponent component => $"component {component.Data.CustomId}",
+            SocketModal modal => $"modal {modal.Data.CustomId}",
+            _ => interaction.Type.ToString(),
+        };
+
+    private static string GetSlashCommandName(SocketSlashCommand slash)
+    {
+        var name = $"/{slash.CommandName}";
+        var options = slash.Data.Options;
+        while (
+            options?.FirstOrDefault(option =>
+                option.Type
+                    is ApplicationCommandOptionType.SubCommand
+                        or ApplicationCommandOptionType.SubCommandGroup
+            )
+                is { } subCommand
+        )
+        {
+            name += $" {subCommand.Name}";
+            options = subCommand.Options;
+        }
+        return name;
     }
 
     private async Task InteractionExecutedAsync(

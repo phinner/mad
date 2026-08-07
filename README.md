@@ -22,6 +22,7 @@ Copy `MadConfig.example.json` to `MadConfig.json` to start with a safe local con
 {
   "DiscordToken": "your-bot-token",
   "DatabasePath": "./mad.db",
+  "SentryDsn": "https://xxx@xxx.ingest.de.sentry.io/xxx",
   "Debug": true,
   "ManagerGuild": 123456789012345678,
   "MaxRulesPerChannel": 1,

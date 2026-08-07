@@ -14,6 +14,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 internal static class MadProgram
 {
@@ -56,10 +57,21 @@ internal static class MadProgram
             throw new InvalidOperationException("MaxRulesPerGuild must be greater than zero.");
         }
 
+        if (!string.IsNullOrWhiteSpace(configuration.SentryDsn))
+        {
+            builder.Logging.AddSentry(options =>
+            {
+                options.Dsn = configuration.SentryDsn;
+                options.Debug = configuration.Debug;
+                options.EnableLogs = true;
+                options.TracesSampleRate = 1.0;
+            });
+        }
+
         var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = configuration.DatabasePath,
-        }.ToString();
+        };
 
         builder.Services.AddSingleton(configuration);
         builder.Services.AddSingleton<DiscordSocketClient>();
@@ -78,7 +90,9 @@ internal static class MadProgram
             }
         );
 
-        builder.Services.AddDbContext<MadDbContext>(options => options.UseSqlite(connectionString));
+        builder.Services.AddDbContext<MadDbContext>(options =>
+            options.UseSqlite(connectionString.ConnectionString)
+        );
         builder.Services.AddScoped<DeletionRuleService>();
 
         builder.Services.AddHostedService<MadDdHostedService>();

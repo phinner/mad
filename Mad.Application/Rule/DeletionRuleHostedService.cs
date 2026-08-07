@@ -1,9 +1,11 @@
 using Discord;
 using Discord.WebSocket;
 using Mad.Discord;
+using Mad.Observability;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Sentry;
 
 namespace Mad.Rule;
 
@@ -31,6 +33,8 @@ internal sealed class DeletionRuleHostedService(
 
     private async Task DeleteEligibleMessagesAsync(CancellationToken cancellationToken)
     {
+        var transaction = SentrySdk.StartTransaction("deletion-rule-job", "job.deletion");
+        SentrySdk.ConfigureScope(scope => scope.Transaction = transaction);
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
@@ -39,21 +43,35 @@ internal sealed class DeletionRuleHostedService(
 
             await foreach (var guildId in guilds.WithCancellation(cancellationToken))
             {
-                await DeleteForGuildAsync(guildId, cancellationToken);
+                await DeleteForGuildAsync(guildId, transaction, cancellationToken);
             }
+
+            transaction.Status ??= SpanStatus.Ok;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            transaction.Status = SpanStatus.Cancelled;
             throw;
         }
         catch (Exception exception)
         {
+            transaction.Status = SpanStatus.InternalError;
             logger.LogError(exception, "Could not load message deletion rules.");
+        }
+        finally
+        {
+            transaction.Finish();
         }
     }
 
-    private async Task DeleteForGuildAsync(ulong guildId, CancellationToken cancellationToken)
+    private async Task DeleteForGuildAsync(
+        ulong guildId,
+        ISpan parent,
+        CancellationToken cancellationToken
+    )
     {
+        var span = parent.StartChild("job.deletion.guild", $"guild {guildId}");
+        MadTelemetry.ScannedGuilds.Add(1);
         try
         {
             var guild = client.GetGuild(guildId);
@@ -61,6 +79,8 @@ internal sealed class DeletionRuleHostedService(
             var rules = scope.ServiceProvider.GetRequiredService<DeletionRuleService>();
             if (guild is null)
             {
+                MadTelemetry.StaleGuilds.Add(1);
+                span.Status = SpanStatus.NotFound;
                 var deletedRules = await rules.DeleteByGuildAsync(guildId, cancellationToken);
                 logger.LogWarning(
                     "Could not find configured guild {GuildId}; removed {RuleCount} rules.",
@@ -80,29 +100,40 @@ internal sealed class DeletionRuleHostedService(
                 channels,
                 parallelOptions,
                 async (channelId, childCancellationToken) =>
-                    await DeleteForChannelAsync(guild, channelId, childCancellationToken)
+                    await DeleteForChannelAsync(guild, channelId, span, childCancellationToken)
             );
+
+            span.Status ??= SpanStatus.Ok;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            span.Status = SpanStatus.Cancelled;
             throw;
         }
         catch (Exception exception)
         {
+            span.Status = SpanStatus.InternalError;
             logger.LogError(
                 exception,
                 "Could not process deletion rules for guild {GuildId}.",
                 guildId
             );
         }
+        finally
+        {
+            span.Finish();
+        }
     }
 
     private async ValueTask DeleteForChannelAsync(
         SocketGuild guild,
         ulong channelId,
+        ISpan parent,
         CancellationToken cancellationToken
     )
     {
+        var span = parent.StartChild("job.deletion.channel", $"channel {channelId}");
+        MadTelemetry.ScannedChannels.Add(1);
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
@@ -110,6 +141,8 @@ internal sealed class DeletionRuleHostedService(
             ITextChannel? channel = guild.GetTextChannel(channelId);
             if (channel is null)
             {
+                MadTelemetry.StaleChannels.Add(1);
+                span.Status = SpanStatus.NotFound;
                 var deletedRules = await service.DeleteByGuildAndChannelAsync(
                     guild.Id,
                     channelId,
@@ -131,6 +164,7 @@ internal sealed class DeletionRuleHostedService(
             );
             if (rules.Count == 0)
             {
+                span.Status = SpanStatus.Ok;
                 return;
             }
 
@@ -142,7 +176,7 @@ internal sealed class DeletionRuleHostedService(
                 CacheMode.AllowDownload,
                 requestOptions
             );
-            var deleted = await ProcessAsync(
+            var (scanned, deleted) = await ProcessAsync(
                 messageChunks,
                 channel,
                 message =>
@@ -162,6 +196,12 @@ internal sealed class DeletionRuleHostedService(
                 cancellationToken
             );
 
+            MadTelemetry.ScannedMessages.Add(scanned);
+            MadTelemetry.DeletedMessages.Add(deleted);
+            span.SetData("messages.scanned", scanned);
+            span.SetData("messages.deleted", deleted);
+            span.Status = SpanStatus.Ok;
+
             if (deleted > 0 && logger.IsEnabled(LogLevel.Information))
             {
                 logger.LogInformation(
@@ -174,10 +214,12 @@ internal sealed class DeletionRuleHostedService(
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            span.Status = SpanStatus.Cancelled;
             throw;
         }
         catch (Exception exception)
         {
+            span.Status = SpanStatus.InternalError;
             logger.LogError(
                 exception,
                 "Could not delete messages from channel {ChannelId} in guild {GuildId}.",
@@ -185,15 +227,20 @@ internal sealed class DeletionRuleHostedService(
                 guild.Id
             );
         }
+        finally
+        {
+            span.Finish();
+        }
     }
 
-    private static async Task<int> ProcessAsync(
+    private static async Task<(int Scanned, int Deleted)> ProcessAsync(
         IAsyncEnumerable<IReadOnlyCollection<IMessage>> chunks,
         ITextChannel channel,
         Func<IMessage, EvaluatorResult> evaluator,
         CancellationToken cancellationToken
     )
     {
+        var scanned = 0;
         var deleted = 0;
 
         await foreach (var chunk in chunks.WithCancellation(cancellationToken))
@@ -203,6 +250,7 @@ internal sealed class DeletionRuleHostedService(
 
             foreach (var message in chunk)
             {
+                scanned++;
                 var result = evaluator(message);
                 switch (result)
                 {
@@ -236,7 +284,7 @@ internal sealed class DeletionRuleHostedService(
             }
         }
 
-        return deleted;
+        return (scanned, deleted);
     }
 
     private static Task BulkDeleteAsync(

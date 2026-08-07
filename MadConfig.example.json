@@ -1,6 +1,7 @@
 {
   "DiscordToken": "your-bot-token",
   "DatabasePath": "./mad.db",
+  "SentryDsn": "https://xxx@xxx.ingest.de.sentry.io/xxx",
   "Debug": false,
   "ManagerGuild": null,
   "MaxRulesPerChannel": 1,

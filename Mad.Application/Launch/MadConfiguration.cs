@@ -6,6 +6,8 @@ public sealed class MadConfiguration
 
     public required string DatabasePath { get; init; } = "MadDatabase.sqlite";
 
+    public required string SentryDsn { get; init; }
+
     public bool Debug { get; init; }
 
     public ulong? ManagerGuild { get; init; }
