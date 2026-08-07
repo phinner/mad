@@ -8,14 +8,14 @@ permissions:
   contents: read
 
 jobs:
-  format:
-    name: Check formatting
+  action:
+    name: Action
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      - run: dotnet restore MAD.slnx && dotnet tool restore
+      - run: dotnet restore Mad.slnx && dotnet tool restore
       - run: dotnet csharpier check .
-      - run: dotnet build MAD.slnx --no-restore --configuration Release
+      - run: dotnet build Mad.slnx --no-restore --configuration Release
