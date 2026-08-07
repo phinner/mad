@@ -60,7 +60,7 @@ internal sealed class DeletionRuleHostedService(
             var rules = scope.ServiceProvider.GetRequiredService<DeletionRuleService>();
             var guilds = rules.SelectGuildsWithRulesAsync(cancellationToken);
 
-            await foreach (var guildId in guilds.WithCancellation(cancellationToken))
+            await foreach (var guildId in guilds)
             {
                 await DeleteForGuildAsync(guildId, transaction, cancellationToken);
             }

@@ -17,7 +17,7 @@ internal sealed class DiscordHostedService(
     ILogger<DiscordHostedService> logger
 ) : IHostedService
 {
-    public async Task StartAsync(CancellationToken cancellation)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         client.Log += LogAsync;
         interactions.Log += LogAsync;
@@ -31,7 +31,7 @@ internal sealed class DiscordHostedService(
         {
             await client.LoginAsync(TokenType.Bot, configuration.DiscordToken);
             await client.StartAsync();
-            await ready.Task.WaitAsync(cancellation);
+            await ready.Task.WaitAsync(cancellationToken);
         }
         finally
         {
@@ -64,7 +64,7 @@ internal sealed class DiscordHostedService(
         }
     }
 
-    public async Task StopAsync(CancellationToken cancellation)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("Stopping Discord client.");
         client.InteractionCreated -= OnInteractionCreatedAsync;

@@ -18,7 +18,7 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
         ulong channelId,
         DiscordUserType userType,
         TimeSpan olderThan,
-        CancellationToken cancellation = default
+        CancellationToken cancellationToken = default
     )
     {
         name = NormalizeName(name);
@@ -29,14 +29,14 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
 
         await using var transaction = await db.Database.BeginTransactionAsync(
             IsolationLevel.Serializable,
-            cancellation
+            cancellationToken
         );
 
         var existingRules = await db
             .DeletionRules.AsNoTracking()
             .Where(rule => rule.GuildId == guildId)
             .Select(rule => new { rule.Name, rule.ChannelId })
-            .ToListAsync(cancellation);
+            .ToListAsync(cancellationToken);
 
         if (existingRules.Any(rule => rule.Name == name))
         {
@@ -58,26 +58,26 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
 
         await db.DeletionRules.AddAsync(
             new DeletionRule(guildId, name, channelId, userType, olderThan),
-            cancellation
+            cancellationToken
         );
-        await db.SaveChangesAsync(cancellation);
-        await transaction.CommitAsync(cancellation);
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return new Result.Success();
     }
 
     public async Task<IReadOnlyList<DeletionRule>> SelectByGuildAsync(
         ulong guildId,
-        CancellationToken cancellation = default
+        CancellationToken cancellationToken = default
     )
     {
         return await db
             .DeletionRules.AsNoTracking()
             .Where(rule => rule.GuildId == guildId)
-            .ToListAsync(cancellation);
+            .ToListAsync(cancellationToken);
     }
 
     public async IAsyncEnumerable<ulong> SelectGuildsWithRulesAsync(
-        [EnumeratorCancellation] CancellationToken cancellation = default
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
         var guilds = db
@@ -86,7 +86,7 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
             .Distinct()
             .AsAsyncEnumerable();
 
-        await foreach (var guild in guilds.WithCancellation(cancellation))
+        await foreach (var guild in guilds.WithCancellation(cancellationToken))
         {
             yield return guild;
         }
@@ -94,7 +94,7 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
 
     public async IAsyncEnumerable<ulong> SelectChannelsWithRulesAsync(
         ulong guildId,
-        [EnumeratorCancellation] CancellationToken cancellation = default
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
         var channels = db
@@ -104,7 +104,7 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
             .Distinct()
             .AsAsyncEnumerable();
 
-        await foreach (var channel in channels.WithCancellation(cancellation))
+        await foreach (var channel in channels.WithCancellation(cancellationToken))
         {
             yield return channel;
         }
@@ -113,37 +113,37 @@ public sealed class DeletionRuleService(MadDbContext db, MadConfiguration config
     public async Task<IReadOnlyList<DeletionRule>> SelectByGuildAndChannelAsync(
         ulong guildId,
         ulong channelId,
-        CancellationToken cancellation = default
+        CancellationToken cancellationToken = default
     )
     {
         return await db
             .DeletionRules.AsNoTracking()
             .Where(rule => rule.GuildId == guildId && rule.ChannelId == channelId)
-            .ToListAsync(cancellation);
+            .ToListAsync(cancellationToken);
     }
 
     public Task<int> DeleteByGuildAndChannelAsync(
         ulong guildId,
         ulong channelId,
-        CancellationToken cancellation = default
+        CancellationToken cancellationToken = default
     ) =>
         db
             .DeletionRules.Where(rule => rule.GuildId == guildId && rule.ChannelId == channelId)
-            .ExecuteDeleteAsync(cancellation);
+            .ExecuteDeleteAsync(cancellationToken);
 
-    public Task<int> DeleteByGuildAsync(ulong guildId, CancellationToken cancellation = default) =>
-        db.DeletionRules.Where(rule => rule.GuildId == guildId).ExecuteDeleteAsync(cancellation);
+    public Task<int> DeleteByGuildAsync(ulong guildId, CancellationToken cancellationToken = default) =>
+        db.DeletionRules.Where(rule => rule.GuildId == guildId).ExecuteDeleteAsync(cancellationToken);
 
     public async Task<bool> DeleteAsync(
         ulong guildId,
         string name,
-        CancellationToken cancellation = default
+        CancellationToken cancellationToken = default
     )
     {
         name = NormalizeName(name);
         var deletedRows = await db
             .DeletionRules.Where(rule => rule.GuildId == guildId && rule.Name == name)
-            .ExecuteDeleteAsync(cancellation);
+            .ExecuteDeleteAsync(cancellationToken);
         return deletedRows > 0;
     }
 
