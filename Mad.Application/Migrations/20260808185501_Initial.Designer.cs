@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Mad.Migrations
 {
     [DbContext(typeof(MadDbContext))]
-    [Migration("20260807233608_Initial")]
+    [Migration("20260808185501_Initial")]
     partial class Initial
     {
         /// <inheritdoc />
@@ -20,27 +20,39 @@ namespace Mad.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
 
-            modelBuilder.Entity("Mad.Rule.DeletionRule", b =>
+            modelBuilder.Entity("Mad.Rule.AutoDeleteRule", b =>
                 {
                     b.Property<ulong>("GuildId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<string>("Name")
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
                     b.Property<ulong>("ChannelId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IncludePins")
                         .HasColumnType("INTEGER");
 
                     b.Property<TimeSpan>("OlderThan")
                         .HasColumnType("TEXT");
 
-                    b.Property<int>("UserType")
+                    b.Property<int?>("TargetUserType")
                         .HasColumnType("INTEGER");
 
-                    b.HasKey("GuildId", "Name");
+                    b.HasKey("GuildId", "ChannelId");
 
-                    b.ToTable("DeletionRules");
+                    b.ToTable("AutoDeleteRules");
+                });
+
+            modelBuilder.Entity("Mad.Settings.GuildSetting", b =>
+                {
+                    b.Property<ulong>("GuildId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<ulong?>("LogChannelId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("GuildId");
+
+                    b.ToTable("GuildSettings");
                 });
 #pragma warning restore 612, 618
         }

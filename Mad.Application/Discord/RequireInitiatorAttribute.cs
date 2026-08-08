@@ -3,7 +3,7 @@ using Discord.Interactions;
 
 namespace Mad.Discord;
 
-internal sealed class RequireInitiatorCheck : PreconditionAttribute
+internal sealed class RequireInitiatorAttribute : PreconditionAttribute
 {
     public override Task<PreconditionResult> CheckRequirementsAsync(
         IInteractionContext context,
@@ -17,9 +17,7 @@ internal sealed class RequireInitiatorCheck : PreconditionAttribute
         )
         {
             return Task.FromResult(
-                PreconditionResult.FromError(
-                    "This component is not associated with an interaction response."
-                )
+                PreconditionResult.FromError("I can't tell which command these buttons belong to. Run it again.")
             );
         }
 
@@ -27,7 +25,7 @@ internal sealed class RequireInitiatorCheck : PreconditionAttribute
             originalInteraction.UserId == context.User.Id
                 ? PreconditionResult.FromSuccess()
                 : PreconditionResult.FromError(
-                    "Only the user who initiated this interaction can use this component."
+                    "These buttons belong to whoever ran the command. Run it yourself and you'll get your own."
                 )
         );
     }

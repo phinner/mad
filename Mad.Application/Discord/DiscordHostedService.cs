@@ -40,19 +40,28 @@ internal sealed class DiscordHostedService(
 
         if (configuration.Debug)
         {
-            await interactions.RegisterCommandsToGuildAsync(configuration.ManagerGuild!.Value);
+            var manager = configuration.ManagerGuild!.Value;
+            await client.Rest.DeleteAllGlobalCommandsAsync();
+            logger.LogInformation("Cleared global commands for debug mode.");
+
+            await client.Rest.BulkOverwriteGuildCommands([], manager);
+            logger.LogInformation("Cleared existing commands from manager guild {GuildId}.", manager);
+
+            await interactions.RegisterCommandsToGuildAsync(manager, deleteMissing: true);
             if (logger.IsEnabled(LogLevel.Information))
             {
-                logger.LogInformation(
-                    "Discord commands registered to manager guild {GuildId}.",
-                    configuration.ManagerGuild
-                );
+                logger.LogInformation("Discord commands registered to manager guild {GuildId}.", manager);
             }
         }
         else
         {
-            await interactions.RegisterCommandsGloballyAsync();
+            await interactions.RegisterCommandsGloballyAsync(deleteMissing: true);
             logger.LogInformation("Discord commands registered globally.");
+            if (configuration.ManagerGuild is { } manager)
+            {
+                await client.Rest.BulkOverwriteGuildCommands([], manager);
+                logger.LogInformation("Cleared commands from manager guild {GuildId}.", manager);
+            }
         }
         logger.LogInformation("Discord client started.");
         return;
@@ -93,10 +102,10 @@ internal sealed class DiscordHostedService(
             );
         }
 
-        var transaction = SentrySdk.StartTransaction(
-            GetTransactionName(interaction),
-            "discord.interaction"
-        );
+        // Own scope: interactions are dispatched onto the thread pool and would otherwise overwrite
+        // each other's transaction on the shared one.
+        using var sentryScope = SentrySdk.PushScope();
+        var transaction = SentrySdk.StartTransaction(GetTransactionName(interaction), "discord.interaction");
         transaction.SetTag("discord.interaction_type", interaction.Type.ToString());
         if (interaction.GuildId is { } guildId)
         {
@@ -120,19 +129,15 @@ internal sealed class DiscordHostedService(
             }
 
             transaction.Status = SpanStatus.UnknownError;
-            logger.LogWarning(
-                "Interaction {InteractionId} failed: {Error}",
-                interaction.Id,
-                result.ErrorReason
-            );
+            logger.LogWarning("Interaction {InteractionId} failed: {Error}", interaction.Id, result.ErrorReason);
 
-            await SendFailureResponseAsync(interaction);
+            await SendFailureResponseAsync(interaction, result);
         }
         catch (Exception exception)
         {
             transaction.Status = SpanStatus.InternalError;
             logger.LogError(exception, "Interaction {InteractionId} threw.", interaction.Id);
-            await SendFailureResponseAsync(interaction);
+            await SendFailureResponseAsync(interaction, result: null);
         }
         finally
         {
@@ -156,9 +161,7 @@ internal sealed class DiscordHostedService(
         var options = slash.Data.Options;
         while (
             options?.FirstOrDefault(option =>
-                option.Type
-                    is ApplicationCommandOptionType.SubCommand
-                        or ApplicationCommandOptionType.SubCommandGroup
+                option.Type is ApplicationCommandOptionType.SubCommand or ApplicationCommandOptionType.SubCommandGroup
             )
                 is { } subCommand
         )
@@ -169,22 +172,34 @@ internal sealed class DiscordHostedService(
         return name;
     }
 
-    private async Task SendFailureResponseAsync(IDiscordInteraction interaction)
+    /// <summary>
+    /// Preconditions write messages meant for the member who clicked, so pass those through
+    /// verbatim; anything else is ours to explain and must not leak internals.
+    /// </summary>
+    private async Task SendFailureResponseAsync(IDiscordInteraction interaction, IResult? result)
     {
+        var body = result is { Error: InteractionCommandError.UnmetPrecondition, ErrorReason: { Length: > 0 } reason }
+            ? reason
+            : "Something went wrong on my end, so I've not touched anything. Give it another go in a moment, "
+                + "and report it on GitHub if it keeps happening.";
+        var components = MadTheme.ErrorMessage(body);
+
         try
         {
             if (interaction.HasResponded)
             {
                 await interaction.FollowupAsync(
-                    "This interaction could not be completed.",
-                    ephemeral: true
+                    ephemeral: true,
+                    components: components,
+                    flags: MessageFlags.ComponentsV2
                 );
             }
             else
             {
                 await interaction.RespondAsync(
-                    "This interaction could not be completed.",
-                    ephemeral: true
+                    ephemeral: true,
+                    components: components,
+                    flags: MessageFlags.ComponentsV2
                 );
             }
         }

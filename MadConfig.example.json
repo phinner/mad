@@ -4,6 +4,6 @@
   "SentryDsn": "https://xxx@xxx.ingest.de.sentry.io/xxx",
   "Debug": false,
   "ManagerGuild": null,
-  "MaxRulesPerChannel": 1,
-  "MaxRulesPerGuild": 20
+  "MaxChannelsPerGuild": 20,
+  "MaxChannelConcurrency": 10
 }

@@ -7,9 +7,5 @@ namespace Mad.Database;
 internal sealed class MadDbContextFactory : IDesignTimeDbContextFactory<MadDbContext>
 {
     public MadDbContext CreateDbContext(string[] args) =>
-        new(
-            new DbContextOptionsBuilder<MadDbContext>()
-                .UseSqlite("Data Source=MadDatabase.sqlite")
-                .Options
-        );
+        new(new DbContextOptionsBuilder<MadDbContext>().UseSqlite("Data Source=MadDatabase.sqlite").Options);
 }

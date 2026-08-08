@@ -1,20 +1,19 @@
-﻿// See https://aka.ms/new-console-template for more information
-
 using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
 using Mad.Database;
+using Mad.Delete;
 using Mad.Discord;
-using Mad.Rule;
-
-namespace Mad.Launch;
-
+using Mad.Log;
+using Mad.Settings;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+
+namespace Mad.Launch;
 
 internal static class MadProgram
 {
@@ -40,21 +39,19 @@ internal static class MadProgram
             throw new InvalidOperationException("DatabasePath must be configured.");
         }
 
-        if (configuration is { Debug: true, ManagerGuild: not > 0 })
+        if (configuration is { Debug: true, ManagerGuild: null or 0 })
         {
-            throw new InvalidOperationException(
-                "ManagerGuild must be configured when Debug is enabled."
-            );
+            throw new InvalidOperationException("ManagerGuild must be configured when Debug is enabled.");
         }
 
-        if (configuration.MaxRulesPerChannel <= 0)
+        if (configuration.MaxChannelsPerGuild <= 0)
         {
-            throw new InvalidOperationException("MaxRulesPerChannel must be greater than zero.");
+            throw new InvalidOperationException("MaxChannelsPerGuild must be greater than zero.");
         }
 
-        if (configuration.MaxRulesPerGuild <= 0)
+        if (configuration.MaxChannelConcurrency <= 0)
         {
-            throw new InvalidOperationException("MaxRulesPerGuild must be greater than zero.");
+            throw new InvalidOperationException("MaxChannelConcurrency must be greater than zero.");
         }
 
         if (!string.IsNullOrWhiteSpace(configuration.SentryDsn))
@@ -69,10 +66,7 @@ internal static class MadProgram
             });
         }
 
-        var connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = configuration.DatabasePath,
-        };
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = configuration.DatabasePath };
 
         builder.Services.AddSingleton(configuration);
         builder.Services.AddSingleton<DiscordSocketClient>();
@@ -87,19 +81,16 @@ internal static class MadProgram
             }
         ));
         builder.Services.AddSingleton(
-            new DiscordSocketConfig
-            {
-                GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMessages,
-            }
+            new DiscordSocketConfig { GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMessages }
         );
 
-        builder.Services.AddDbContext<MadDbContext>(options =>
-            options.UseSqlite(connectionString.ConnectionString)
-        );
-        builder.Services.AddScoped<DeletionRuleService>();
+        builder.Services.AddDbContext<MadDbContext>(options => options.UseSqlite(connectionString.ConnectionString));
+        builder.Services.AddScoped<AutoDeleteRuleService>();
+        builder.Services.AddScoped<GuildSettingService>();
+        builder.Services.AddSingleton<LogNotifier>();
 
         builder.Services.AddHostedService<MadDbHostedService>();
-        builder.Services.AddHostedService<DeletionRuleHostedService>();
+        builder.Services.AddHostedService<AutoDeleteHostedService>();
         builder.Services.AddHostedService<DiscordHostedService>();
 
         await builder.Build().RunAsync();
