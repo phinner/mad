@@ -1,18 +1,20 @@
-using Discord;
-using Discord.Interactions;
 using Mad.Discord;
 using Mad.Settings;
+using NetCord;
+using NetCord.Services;
+using NetCord.Services.ApplicationCommands;
 
 namespace Mad.Log;
 
-[Group("logchannel", "Choose where I file my reports.")]
-[RequireUserPermission(GuildPermission.ManageMessages)]
-public sealed class LogInteractionModule(GuildSettingService settings, LogNotifier notifier) : MadInteractionModule
+[SlashCommand("logchannel", "Choose where I file my reports.")]
+[RequireUserPermissions<ApplicationCommandContext>(Permissions.ManageMessages)]
+public sealed class LogInteractionModule(GuildSettingService settings, LogNotifier notifier)
+    : MadApplicationCommandModule
 {
     internal const string EnableDescription = "I post my sweep summaries and any setting changes in this channel.";
     internal const string DisableDescription = "I stop posting reports. My sweeps carry on as normal.";
 
-    [SlashCommand("enable", EnableDescription)]
+    [SubSlashCommand("enable", EnableDescription)]
     public async Task Enable()
     {
         var guildId = await GetGuildIdAsync();
@@ -27,12 +29,12 @@ public sealed class LogInteractionModule(GuildSettingService settings, LogNotifi
             return;
         }
 
-        var permissions = Context.Guild.CurrentUser.GetPermissions(channel);
-        if (!permissions.ViewChannel || !permissions.SendMessages)
+        var permissions = Context.Interaction.AppPermissions;
+        if (!permissions.HasFlag(Permissions.ViewChannel | Permissions.SendMessages))
         {
             await RespondThemedAsync(
                 MadTheme.ErrorMessage(
-                    $"I need **View Channel** and **Send Messages** in {channel.Mention} before I can file "
+                    $"I need **View Channel** and **Send Messages** in {channel} before I can file "
                         + "anything there. Grant those and run this again."
                 )
             );
@@ -42,14 +44,14 @@ public sealed class LogInteractionModule(GuildSettingService settings, LogNotifi
         await settings.UpsertAsync(new GuildSetting(guildId.Value, channel.Id));
         await RespondThemedAsync(
             MadTheme.SuccessMessage(
-                $"Right, reports go in {channel.Mention} from now on: a summary after every sweep that deletes "
+                $"Right, reports go in {channel} from now on: a summary after every sweep that deletes "
                     + "something, and a note whenever someone changes my settings."
             )
         );
-        await notifier.NotifyConfigChangeAsync(guildId.Value, Context.User, $"made {channel.Mention} the log channel.");
+        await notifier.NotifyConfigChangeAsync(guildId.Value, Context.User, $"made {channel} the log channel.");
     }
 
-    [SlashCommand("disable", DisableDescription)]
+    [SubSlashCommand("disable", DisableDescription)]
     public async Task Disable()
     {
         var guildId = await GetGuildIdAsync();
@@ -70,7 +72,6 @@ public sealed class LogInteractionModule(GuildSettingService settings, LogNotifi
             return;
         }
 
-        // File the farewell while the channel is still configured, or the notifier has nowhere to send it.
         await notifier.NotifyConfigChangeAsync(
             guildId.Value,
             Context.User,

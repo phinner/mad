@@ -1,29 +1,40 @@
-using Discord;
-using Discord.Interactions;
 using Mad.Discord;
 using Mad.Log;
+using NetCord;
+using NetCord.Rest;
+using NetCord.Services;
+using NetCord.Services.ApplicationCommands;
+using NetCord.Services.ComponentInteractions;
 
 namespace Mad.Delete;
 
-[Group("autodelete", "Put me on a channel and I'll keep it clear of old messages.")]
-[RequireUserPermission(GuildPermission.ManageMessages)]
+[SlashCommand("autodelete", "Put me on a channel and I'll keep it clear of old messages.")]
+[RequireUserPermissions<ApplicationCommandContext>(Permissions.ManageMessages)]
 public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, LogNotifier notifier)
-    : MadInteractionModule
+    : MadApplicationCommandModule
 {
     internal const string EnableDescription =
         "I sweep this channel and delete messages once they pass the age you set.";
     internal const string DisableDescription = "I stop sweeping this channel. Messages already there stay put.";
     internal const string ListDescription = "I list every channel on my round and the settings for each.";
 
-    private const int RulesPerPage = 10;
-
-    [SlashCommand("enable", EnableDescription)]
+    [SubSlashCommand("enable", EnableDescription)]
     public async Task Enable(
-        [Summary("older-than", "How old a message must be before I delete it, from 1m (a minute) to 12d (12 days).")]
+        [SlashCommandParameter(
+            Name = "older-than",
+            Description = "How old a message must be before I delete it, from 1m (a minute) to 12d (12 days)."
+        )]
             TimeSpan olderThan,
-        [Summary("target-user-type", "Only delete messages from this kind of author. Default: everyone.")]
+        [SlashCommandParameter(
+            Name = "target-user-type",
+            Description = "Only delete messages from this kind of author. Default: everyone."
+        )]
             DiscordUserType? targetUserType = null,
-        [Summary("include-pin", "Delete pinned messages too. Default: no, pins are kept.")] bool includePins = false
+        [SlashCommandParameter(
+            Name = "include-pin",
+            Description = "Delete pinned messages too. Default: no, pins are kept."
+        )]
+            bool includePins = false
     )
     {
         var guildId = await GetGuildIdAsync();
@@ -54,14 +65,66 @@ public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, Log
             MadTheme.InfoMessage(
                 $"Before I start, here's the job: I delete {options.Describe(channel)}.\n"
                     + "I sweep about once a minute and keep at it until you run `/autodelete disable` there.",
-                MadTheme.ConfirmButton($"mad:v0:autodelete:confirm:{options.ToCustomIdArguments()}"),
+                MadTheme.ConfirmButton($"mad:v0:autodelete:confirm,{options.ToCustomIdArguments()}"),
                 MadTheme.CancelButton("mad:v0:autodelete:cancel")
             )
         );
     }
 
+    [SubSlashCommand("disable", DisableDescription)]
+    public async Task Disable()
+    {
+        var guildId = await GetGuildIdAsync();
+        if (guildId is null)
+        {
+            return;
+        }
+
+        var channel = await GetTextChannelAsync();
+        if (channel is null)
+        {
+            return;
+        }
+
+        if (await rules.DeleteByGuildAndChannelAsync(guildId.Value, channel.Id) == 0)
+        {
+            await RespondThemedAsync(
+                MadTheme.InfoMessage(
+                    $"{channel} isn't on my round, so there's nothing to stop. "
+                        + "Run `/autodelete list` to see the channels that are."
+                )
+            );
+            return;
+        }
+
+        await RespondThemedAsync(
+            MadTheme.SuccessMessage(
+                $"Taken off my round. I'll stop deleting in {channel}; whatever is still there stays."
+            )
+        );
+        await notifier.NotifyConfigChangeAsync(guildId.Value, Context.User, $"took {channel} off the round.");
+    }
+
+    [SubSlashCommand("list", ListDescription)]
+    public async Task List()
+    {
+        var guildId = await GetGuildIdAsync();
+        if (guildId is null)
+        {
+            return;
+        }
+
+        await DeferThemedAsync();
+        await FollowupThemedAsync(await AutoDeleteList.BuildPageAsync(rules, guildId.Value, 0));
+    }
+}
+
+[RequireUserPermissions<ButtonInteractionContext>(Permissions.ManageMessages)]
+public sealed class AutoDeleteComponentInteractionModule(AutoDeleteRuleService rules, LogNotifier notifier)
+    : MadComponentInteractionModule
+{
     [RequireInitiator]
-    [ComponentInteraction("mad:v0:autodelete:confirm:*,*,*", ignoreGroupNames: true)]
+    [ComponentInteraction("mad:v0:autodelete:confirm")]
     public async Task ConfirmEnable(int minutes, int target, int includePins)
     {
         var guildId = await GetGuildIdAsync();
@@ -103,7 +166,7 @@ public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, Log
             case AutoDeleteRuleService.Result.AlreadyExists:
                 await UpdateThemedAsync(
                     MadTheme.ErrorMessage(
-                        $"{channel.Mention} was put on my round while this was open, so I've left it as it is. "
+                        $"{channel} was put on my round while this was open, so I've left it as it is. "
                             + "Check it with `/autodelete list`, or run `/autodelete enable` again to replace those settings."
                     )
                 );
@@ -123,70 +186,19 @@ public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, Log
         var settings = MessageDeletionOptions.Describe(options.OlderThan, options.Target, options.IncludePins);
         await UpdateThemedAsync(
             MadTheme.SuccessMessage(
-                $"Right, {channel.Mention} is on my round: {settings}. The first sweep runs within the minute."
+                $"Right, {channel} is on my round: {settings}. The first sweep runs within the minute."
             )
         );
-        await notifier.NotifyConfigChangeAsync(
-            guildId.Value,
-            Context.User,
-            $"put {channel.Mention} on the round: {settings}."
-        );
+        await notifier.NotifyConfigChangeAsync(guildId.Value, Context.User, $"put {channel} on the round: {settings}.");
     }
 
     [RequireInitiator]
-    [ComponentInteraction("mad:v0:autodelete:cancel", ignoreGroupNames: true)]
+    [ComponentInteraction("mad:v0:autodelete:cancel")]
     public Task CancelEnable() =>
         UpdateThemedAsync(MadTheme.InfoMessage("Left it alone. Nothing has been added to my round."));
 
-    [SlashCommand("disable", DisableDescription)]
-    public async Task Disable()
-    {
-        var guildId = await GetGuildIdAsync();
-        if (guildId is null)
-        {
-            return;
-        }
-
-        var channel = await GetTextChannelAsync();
-        if (channel is null)
-        {
-            return;
-        }
-
-        if (await rules.DeleteByGuildAndChannelAsync(guildId.Value, channel.Id) == 0)
-        {
-            await RespondThemedAsync(
-                MadTheme.InfoMessage(
-                    $"{channel.Mention} isn't on my round, so there's nothing to stop. "
-                        + "Run `/autodelete list` to see the channels that are."
-                )
-            );
-            return;
-        }
-
-        await RespondThemedAsync(
-            MadTheme.SuccessMessage(
-                $"Taken off my round. I'll stop deleting in {channel.Mention}; whatever is still there stays."
-            )
-        );
-        await notifier.NotifyConfigChangeAsync(guildId.Value, Context.User, $"took {channel.Mention} off the round.");
-    }
-
-    [SlashCommand("list", ListDescription)]
-    public async Task List()
-    {
-        var guildId = await GetGuildIdAsync();
-        if (guildId is null)
-        {
-            return;
-        }
-
-        await DeferAsync(ephemeral: true);
-        await FollowupThemedAsync(await BuildListPageAsync(guildId.Value, 0));
-    }
-
     [RequireInitiator]
-    [ComponentInteraction("mad:v0:autodelete-list:*", ignoreGroupNames: true)]
+    [ComponentInteraction("mad:v0:autodelete-list")]
     public async Task ListPage(int page)
     {
         var guildId = await GetGuildIdAsync();
@@ -195,10 +207,19 @@ public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, Log
             return;
         }
 
-        await UpdateThemedAsync(await BuildListPageAsync(guildId.Value, page));
+        await UpdateThemedAsync(await AutoDeleteList.BuildPageAsync(rules, guildId.Value, page));
     }
+}
 
-    private async Task<MessageComponent> BuildListPageAsync(ulong guildId, int requestedPage)
+internal static class AutoDeleteList
+{
+    private const int RulesPerPage = 10;
+
+    public static async Task<IEnumerable<IMessageComponentProperties>> BuildPageAsync(
+        AutoDeleteRuleService rules,
+        ulong guildId,
+        int requestedPage
+    )
     {
         var guildRules = (await rules.SelectByGuildAsync(guildId)).OrderBy(rule => rule.ChannelId).ToArray();
 
@@ -223,8 +244,8 @@ public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, Log
 
         return MadTheme.InfoMessage(
             $"### **On my round** - {count}{pageLabel}\n{string.Join('\n', lines)}\n",
-            MadTheme.PageButton("Previous", $"mad:v0:autodelete-list:{page - 1}", page == 0),
-            MadTheme.PageButton("Next", $"mad:v0:autodelete-list:{page + 1}", page == pageCount - 1)
+            MadTheme.PageButton("Previous", $"mad:v0:autodelete-list,{page - 1}", page == 0),
+            MadTheme.PageButton("Next", $"mad:v0:autodelete-list,{page + 1}", page == pageCount - 1)
         );
     }
 }

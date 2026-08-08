@@ -1,30 +1,24 @@
-using Discord;
-using Discord.Interactions;
+using NetCord.Services;
+using NetCord.Services.ComponentInteractions;
 
 namespace Mad.Discord;
 
-internal sealed class RequireInitiatorAttribute : PreconditionAttribute
+internal sealed class RequireInitiatorAttribute : PreconditionAttribute<ButtonInteractionContext>
 {
-    public override Task<PreconditionResult> CheckRequirementsAsync(
-        IInteractionContext context,
-        ICommandInfo commandInfo,
-        IServiceProvider services
+    public override ValueTask<PreconditionResult> EnsureCanExecuteAsync(
+        ButtonInteractionContext context,
+        IServiceProvider? serviceProvider
     )
     {
-        if (
-            context.Interaction is not IComponentInteraction component
-            || component.Message.InteractionMetadata is not { } originalInteraction
-        )
+        if (context.Message.InteractionMetadata is not { } originalInteraction)
         {
-            return Task.FromResult(
-                PreconditionResult.FromError("I can't tell which command these buttons belong to. Run it again.")
-            );
+            return new(PreconditionResult.Fail("I can't tell which command these buttons belong to. Run it again."));
         }
 
-        return Task.FromResult(
-            originalInteraction.UserId == context.User.Id
-                ? PreconditionResult.FromSuccess()
-                : PreconditionResult.FromError(
+        return new(
+            originalInteraction.User.Id == context.User.Id
+                ? PreconditionResult.Success
+                : PreconditionResult.Fail(
                     "These buttons belong to whoever ran the command. Run it yourself and you'll get your own."
                 )
         );

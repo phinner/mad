@@ -1,16 +1,20 @@
-using Discord;
-using Discord.WebSocket;
+using System.Collections.Concurrent;
+using System.Net;
 using Mad.Launch;
 using Mad.Log;
 using Mad.Settings;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NetCord;
+using NetCord.Gateway;
+using NetCord.Rest;
 
 namespace Mad.Delete;
 
 internal sealed class AutoDeleteHostedService(
-    DiscordSocketClient client,
+    GatewayClient client,
+    RestClient rest,
     IServiceScopeFactory scopeFactory,
     LogNotifier notifier,
     MadConfiguration configuration,
@@ -24,7 +28,7 @@ internal sealed class AutoDeleteHostedService(
     protected override async Task ExecuteAsync(CancellationToken cancellationToken)
     {
         client.Ready += SignalClientReadyAsync;
-        client.LeftGuild += ForgetGuildAsync;
+        client.GuildDelete += ForgetGuildAsync;
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -37,48 +41,47 @@ internal sealed class AutoDeleteHostedService(
         finally
         {
             client.Ready -= SignalClientReadyAsync;
-            client.LeftGuild -= ForgetGuildAsync;
+            client.GuildDelete -= ForgetGuildAsync;
         }
     }
 
-    private Task SignalClientReadyAsync()
+    private ValueTask SignalClientReadyAsync(ReadyEventArgs ready)
     {
         _clientEverReady = true;
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    /// <summary>
-    /// Leaving a guild is the only signal that its configuration is really gone. A sweep must never
-    /// infer that from a cache miss, which an outage or a slow guild sync would also produce.
-    /// </summary>
-    private async Task ForgetGuildAsync(SocketGuild guild)
+    private async ValueTask ForgetGuildAsync(GuildDeleteEventArgs guild)
     {
+        if (guild.IsUnavailable)
+        {
+            return;
+        }
+
         try
         {
-            await using var scope = scopeFactory.CreateAsyncScope();
-            var rules = scope.ServiceProvider.GetRequiredService<AutoDeleteRuleService>();
-            var settings = scope.ServiceProvider.GetRequiredService<GuildSettingService>();
-
-            var deletedRules = await rules.DeleteByGuildAsync(guild.Id);
-            await settings.DeleteAsync(guild.Id);
-
+            var deletedRules = await ForgetGuildConfigurationAsync(guild.GuildId);
             logger.LogInformation(
                 "Left guild {GuildId}; removed {RuleCount} rules and its settings.",
-                guild.Id,
+                guild.GuildId,
                 deletedRules
             );
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "Could not remove the configuration for departed guild {GuildId}.", guild.Id);
+            logger.LogError(
+                exception,
+                "Could not remove the configuration for departed guild {GuildId}.",
+                guild.GuildId
+            );
         }
     }
 
     private async Task DeleteEligibleMessagesAsync(CancellationToken cancellationToken)
     {
-        if (!_clientEverReady || client.ConnectionState != ConnectionState.Connected)
+        if (!_clientEverReady)
         {
-            logger.LogDebug("Skipping deletion run; the Discord client is not connected.");
+            logger.LogDebug("Skipping deletion run; the Discord client has not become ready yet.");
             return;
         }
 
@@ -89,16 +92,37 @@ internal sealed class AutoDeleteHostedService(
         SentrySdk.ConfigureScope(scope => scope.Transaction = transaction);
         try
         {
-            IReadOnlyList<ulong> guilds;
-            await using (var scope = scopeFactory.CreateAsyncScope())
+            AutoDeleteRule? cursor = null;
+            while (!cancellationToken.IsCancellationRequested)
             {
-                var rules = scope.ServiceProvider.GetRequiredService<AutoDeleteRuleService>();
-                guilds = await rules.SelectGuildsWithRulesAsync(cancellationToken);
-            }
+                IReadOnlyList<AutoDeleteRule> batch;
+                await using (var scope = scopeFactory.CreateAsyncScope())
+                {
+                    var rules = scope.ServiceProvider.GetRequiredService<AutoDeleteRuleService>();
+                    batch = await rules.SelectAllAsync(configuration.MaxChannelConcurrency, cursor, cancellationToken);
+                }
 
-            foreach (var guildId in guilds)
-            {
-                await DeleteForGuildAsync(guildId, transaction, cancellationToken);
+                if (batch.Count == 0)
+                {
+                    break;
+                }
+
+                // Capture this before workers can delete the cursor row or its entire guild.
+                cursor = batch[^1];
+                var cache = client.Cache;
+
+                var handledMissingGuilds = new ConcurrentDictionary<ulong, byte>();
+                var parallelOptions = new ParallelOptions
+                {
+                    CancellationToken = cancellationToken,
+                    MaxDegreeOfParallelism = configuration.MaxChannelConcurrency,
+                };
+                await Parallel.ForEachAsync(
+                    batch,
+                    parallelOptions,
+                    async (rule, childCancellationToken) =>
+                        await DeleteForRuleAsync(cache, rule, handledMissingGuilds, transaction, childCancellationToken)
+                );
             }
 
             transaction.Status ??= SpanStatus.Ok;
@@ -111,7 +135,7 @@ internal sealed class AutoDeleteHostedService(
         catch (Exception exception)
         {
             transaction.Status = SpanStatus.InternalError;
-            logger.LogError(exception, "Could not load automatic deletion rules.");
+            logger.LogError(exception, "Could not run automatic deletion rules.");
         }
         finally
         {
@@ -119,23 +143,52 @@ internal sealed class AutoDeleteHostedService(
         }
     }
 
-    private async Task DeleteForGuildAsync(ulong guildId, ISpan parent, CancellationToken cancellationToken)
+    private async ValueTask DeleteForRuleAsync(
+        IGatewayClientCache cache,
+        AutoDeleteRule rule,
+        ConcurrentDictionary<ulong, byte> handledMissingGuilds,
+        ISpan parent,
+        CancellationToken cancellationToken
+    )
     {
-        var span = parent.StartChild("job.deletion.guild", $"guild {guildId}");
-        SentrySdk.Metrics.EmitCounter("mad.deletion.guilds.scanned", 1L);
+        var guildId = rule.GuildId;
+        var channelId = rule.ChannelId;
+        var span = parent.StartChild("job.deletion.rule", $"channel {channelId}");
+        SentrySdk.Metrics.EmitCounter("mad.deletion.channels.scanned", 1L);
         try
         {
-            var guild = client.GetGuild(guildId);
-            if (guild is null)
+            if (!cache.Guilds.TryGetValue(guildId, out var guild))
             {
-                // Not cached does not mean gone: ForgetGuildAsync owns removing configuration.
+                span.Status = SpanStatus.Unavailable;
+                if (!handledMissingGuilds.TryAdd(guildId, 0))
+                {
+                    return;
+                }
+
                 SentrySdk.Metrics.EmitCounter("mad.deletion.guilds.stale", 1L);
-                span.Status = SpanStatus.NotFound;
-                logger.LogWarning("Skipping guild {GuildId}; it is not in the cache.", guildId);
+                try
+                {
+                    await rest.GetGuildAsync(guildId, cancellationToken: cancellationToken);
+                    logger.LogDebug(
+                        "Skipping guild {GuildId}; REST confirms it still exists but it is not in the gateway cache.",
+                        guildId
+                    );
+                }
+                catch (RestException exception) when (exception.StatusCode is HttpStatusCode.NotFound)
+                {
+                    var deletedRules = await ForgetGuildConfigurationAsync(guildId, cancellationToken);
+                    span.Status = SpanStatus.NotFound;
+                    logger.LogWarning(
+                        "Discord no longer has guild {GuildId}; removed {RuleCount} rules and its settings.",
+                        guildId,
+                        deletedRules
+                    );
+                }
+
                 return;
             }
 
-            if (!guild.IsConnected)
+            if (guild.IsUnavailable)
             {
                 span.Status = SpanStatus.Unavailable;
                 if (logger.IsEnabled(LogLevel.Debug))
@@ -145,76 +198,27 @@ internal sealed class AutoDeleteHostedService(
                 return;
             }
 
-            IReadOnlyList<AutoDeleteRule> guildRules;
-            await using (var scope = scopeFactory.CreateAsyncScope())
-            {
-                var rules = scope.ServiceProvider.GetRequiredService<AutoDeleteRuleService>();
-                guildRules = await rules.SelectByGuildAsync(guildId, cancellationToken);
-            }
-
-            var parallelOptions = new ParallelOptions
-            {
-                CancellationToken = cancellationToken,
-                MaxDegreeOfParallelism = configuration.MaxChannelConcurrency,
-            };
-            await Parallel.ForEachAsync(
-                guildRules,
-                parallelOptions,
-                async (rule, childCancellationToken) =>
-                    await DeleteForChannelAsync(guild, rule, span, childCancellationToken)
-            );
-
-            span.Status ??= SpanStatus.Ok;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            span.Status = SpanStatus.Cancelled;
-            throw;
-        }
-        catch (Exception exception)
-        {
-            span.Status = SpanStatus.InternalError;
-            logger.LogError(exception, "Could not process deletion rules for guild {GuildId}.", guildId);
-        }
-        finally
-        {
-            span.Finish();
-        }
-    }
-
-    private async ValueTask DeleteForChannelAsync(
-        SocketGuild guild,
-        AutoDeleteRule rule,
-        ISpan parent,
-        CancellationToken cancellationToken
-    )
-    {
-        var channelId = rule.ChannelId;
-        var span = parent.StartChild("job.deletion.channel", $"channel {channelId}");
-        SentrySdk.Metrics.EmitCounter("mad.deletion.channels.scanned", 1L);
-        try
-        {
-            ITextChannel? channel = guild.GetTextChannel(channelId);
-            if (channel is null)
+            if (!guild.Channels.TryGetValue(channelId, out var cachedChannel) || cachedChannel is not TextGuildChannel)
             {
                 SentrySdk.Metrics.EmitCounter("mad.deletion.channels.stale", 1L);
                 span.Status = SpanStatus.NotFound;
 
-                // The guild is connected, so its channel cache is complete: the channel is really gone.
+                // The guild is available, so its channel cache is complete: the channel is really gone.
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var service = scope.ServiceProvider.GetRequiredService<AutoDeleteRuleService>();
-                var deletedRules = await service.DeleteByGuildAndChannelAsync(guild.Id, channelId, cancellationToken);
+                var deletedRules = await service.DeleteByGuildAndChannelAsync(guildId, channelId, cancellationToken);
                 logger.LogWarning(
                     "Could not find configured deletion channel {ChannelId} in guild {GuildId}; removed {RuleCount} rules.",
                     channelId,
-                    guild.Id,
+                    guildId,
                     deletedRules
                 );
                 return;
             }
 
             var (scanned, deleted) = await MessageDeletionService.SweepAsync(
-                channel,
+                rest,
+                channelId,
                 rule.OlderThan,
                 rule.TargetUserType,
                 rule.IncludePins,
@@ -235,11 +239,11 @@ internal sealed class AutoDeleteHostedService(
                         "Deleted {MessageCount} messages from channel {ChannelId} in guild {GuildId}.",
                         deleted,
                         channelId,
-                        guild.Id
+                        guildId
                     );
                 }
 
-                await notifier.NotifySweepAsync(guild.Id, channelId, deleted, cancellationToken);
+                await notifier.NotifySweepAsync(guildId, channelId, deleted, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -252,14 +256,23 @@ internal sealed class AutoDeleteHostedService(
             span.Status = SpanStatus.InternalError;
             logger.LogError(
                 exception,
-                "Could not delete messages from channel {ChannelId} in guild {GuildId}.",
+                "Could not process deletion rule for channel {ChannelId} in guild {GuildId}.",
                 channelId,
-                guild.Id
+                guildId
             );
         }
         finally
         {
             span.Finish();
         }
+    }
+
+    private async Task<int> ForgetGuildConfigurationAsync(ulong guildId, CancellationToken cancellationToken = default)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var rules = scope.ServiceProvider.GetRequiredService<AutoDeleteRuleService>();
+        var settings = scope.ServiceProvider.GetRequiredService<GuildSettingService>();
+        await settings.DeleteAsync(guildId, cancellationToken);
+        return await rules.DeleteByGuildAsync(guildId, cancellationToken);
     }
 }

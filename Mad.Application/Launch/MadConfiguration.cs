@@ -12,9 +12,7 @@ public sealed class MadConfiguration
 
     public ulong? ManagerGuild { get; init; }
 
-    /// <summary>How many channels one guild may have automatic deletion enabled on.</summary>
     public int MaxChannelsPerGuild { get; init; } = 20;
 
-    /// <summary>How many of a guild's channels a single sweep may work through at once.</summary>
     public int MaxChannelConcurrency { get; init; } = 10;
 }

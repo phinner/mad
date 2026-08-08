@@ -1,5 +1,6 @@
-using Discord;
 using Mad.Discord;
+using NetCord;
+using NetCord.Rest;
 
 namespace Mad.Delete;
 
@@ -13,6 +14,7 @@ public static class MessageDeletionService
     public static readonly TimeSpan MaximumOlderThan = TimeSpan.FromDays(12);
 
     private const string AuditLogReason = "Mad automated message deletion";
+    private const int DeleteBatchSize = 100;
 
     /// <summary>
     /// Whole minutes between <see cref="MinimumOlderThan"/> and <see cref="MaximumOlderThan"/>;
@@ -24,7 +26,8 @@ public static class MessageDeletionService
         && olderThan.Ticks % TimeSpan.TicksPerMinute == 0;
 
     public static async Task<(int Scanned, int Deleted)> SweepAsync(
-        ITextChannel channel,
+        RestClient rest,
+        ulong channelId,
         TimeSpan olderThan,
         DiscordUserType? target,
         bool includePins,
@@ -35,102 +38,72 @@ public static class MessageDeletionService
         var cutoff = now - olderThan;
         var bulkDeletionThreshold = now - BulkDeletionWindow;
 
-        // Start at the newest message that is already old enough and walk backwards; anything
-        // newer than the cutoff cannot match.
-        var messageChunks = channel.GetMessagesAsync(
-            SnowflakeUtils.ToSnowflake(cutoff),
-            Direction.Before,
-            int.MaxValue,
-            CacheMode.AllowDownload,
-            new RequestOptions { CancelToken = cancellationToken }
+        var messages = rest.GetMessagesAsync(
+            channelId,
+            new PaginationProperties<ulong> { From = Snowflake.Create(cutoff), Direction = PaginationDirection.Before }
         );
 
-        return await ProcessAsync(
-            messageChunks,
-            channel,
-            message =>
-            {
-                if (message.CreatedAt <= bulkDeletionThreshold)
-                {
-                    return EvaluatorResult.Stop;
-                }
-
-                if (
-                    (message.IsPinned && !includePins)
-                    || (target is { } userType && GetUserType(message.Author) != userType)
-                )
-                {
-                    return EvaluatorResult.Skip;
-                }
-
-                return message.CreatedAt <= cutoff ? EvaluatorResult.Take : EvaluatorResult.Skip;
-            },
-            cancellationToken
-        );
-    }
-
-    private static async Task<(int Scanned, int Deleted)> ProcessAsync(
-        IAsyncEnumerable<IReadOnlyCollection<IMessage>> chunks,
-        ITextChannel channel,
-        Func<IMessage, EvaluatorResult> evaluator,
-        CancellationToken cancellationToken
-    )
-    {
         var scanned = 0;
         var deleted = 0;
+        var deleting = new List<ulong>(DeleteBatchSize);
 
-        await foreach (var chunk in chunks.WithCancellation(cancellationToken))
+        await foreach (var message in messages.WithCancellation(cancellationToken))
         {
-            var deleting = new List<IMessage>();
-            var stop = false;
-
-            foreach (var message in chunk)
-            {
-                var result = evaluator(message);
-                if (result is EvaluatorResult.Stop)
-                {
-                    stop = true;
-                    break;
-                }
-
-                scanned++;
-                switch (result)
-                {
-                    case EvaluatorResult.Skip:
-                        break;
-                    case EvaluatorResult.Take:
-                        deleting.Add(message);
-                        break;
-                    default:
-                        throw new InvalidOperationException($"Unknown filter result {result}.");
-                }
-            }
-
-            if (deleting.Count > 0)
-            {
-                await BulkDeleteAsync(channel, deleting, cancellationToken);
-                deleted += deleting.Count;
-            }
-
-            if (stop)
+            var result = Evaluate(message);
+            if (result is EvaluatorResult.Stop)
             {
                 break;
             }
+
+            scanned++;
+            if (result is not EvaluatorResult.Take)
+            {
+                continue;
+            }
+
+            deleting.Add(message.Id);
+            if (deleting.Count < DeleteBatchSize)
+            {
+                continue;
+            }
+
+            await DeleteAsync(deleting);
         }
 
+        await DeleteAsync(deleting);
         return (scanned, deleted);
-    }
 
-    private static Task BulkDeleteAsync(
-        ITextChannel channel,
-        List<IMessage> messages,
-        CancellationToken cancellationToken
-    )
-    {
-        var requestOptions = CreateRequestOptions(cancellationToken);
-        return messages.Count == 1
-            ? channel.DeleteMessageAsync(messages[0], requestOptions)
-            : channel.DeleteMessagesAsync(messages, requestOptions);
+        EvaluatorResult Evaluate(RestMessage message)
+        {
+            if (message.CreatedAt <= bulkDeletionThreshold)
+            {
+                return EvaluatorResult.Stop;
+            }
+
+            if ((message.IsPinned && !includePins) || (target is { } userType && GetUserType(message) != userType))
+            {
+                return EvaluatorResult.Skip;
+            }
+
+            return message.CreatedAt <= cutoff ? EvaluatorResult.Take : EvaluatorResult.Skip;
+        }
+
+        async Task DeleteAsync(List<ulong> ids)
+        {
+            if (ids.Count == 0)
+            {
+                return;
+            }
+
+            await rest.DeleteMessagesAsync(
+                channelId,
+                ids,
+                new RestRequestProperties { AuditLogReason = AuditLogReason },
+                cancellationToken
+            );
+            deleted += ids.Count;
+            ids.Clear();
+        }
     }
 
     private enum EvaluatorResult
@@ -140,11 +113,8 @@ public static class MessageDeletionService
         Stop,
     }
 
-    private static DiscordUserType GetUserType(IUser author) =>
-        author.IsWebhook ? DiscordUserType.Webhook
-        : author.IsBot ? DiscordUserType.Bot
+    private static DiscordUserType GetUserType(RestMessage message) =>
+        message.WebhookId.HasValue ? DiscordUserType.Webhook
+        : message.Author.IsBot ? DiscordUserType.Bot
         : DiscordUserType.User;
-
-    private static RequestOptions CreateRequestOptions(CancellationToken cancellationToken) =>
-        new() { AuditLogReason = AuditLogReason, CancelToken = cancellationToken };
 }

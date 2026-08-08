@@ -1,20 +1,17 @@
-using Discord;
-using Discord.Interactions;
-using Discord.WebSocket;
+using NetCord;
+using NetCord.Rest;
+using NetCord.Services.ApplicationCommands;
+using NetCord.Services.ComponentInteractions;
 
 namespace Mad.Discord;
 
-/// <summary>
-/// Shared plumbing for M.A.D's modules: guild and text-channel guards, and the Components V2
-/// send helpers so no module has to remember the flag.
-/// </summary>
-public abstract class MadInteractionModule : InteractionModuleBase<SocketInteractionContext>
+public abstract class MadApplicationCommandModule : ApplicationCommandModule<ApplicationCommandContext>
 {
     protected async Task<ulong?> GetGuildIdAsync()
     {
-        if (Context.Guild is not null)
+        if (Context.Guild is { } guild)
         {
-            return Context.Guild.Id;
+            return guild.Id;
         }
 
         await RespondThemedAsync(
@@ -25,9 +22,9 @@ public abstract class MadInteractionModule : InteractionModuleBase<SocketInterac
         return null;
     }
 
-    protected async Task<ITextChannel?> GetTextChannelAsync()
+    protected async Task<TextGuildChannel?> GetTextChannelAsync()
     {
-        if (Context.Channel is ITextChannel channel)
+        if (Context.Channel is TextGuildChannel channel)
         {
             return channel;
         }
@@ -38,24 +35,80 @@ public abstract class MadInteractionModule : InteractionModuleBase<SocketInterac
         return null;
     }
 
-    protected Task RespondThemedAsync(MessageComponent components, bool ephemeral = true) =>
-        RespondAsync(ephemeral: ephemeral, components: components, flags: MessageFlags.ComponentsV2);
+    protected async Task RespondThemedAsync(IEnumerable<IMessageComponentProperties> components, bool ephemeral = true)
+    {
+        await RespondAsync(InteractionCallback.Message(MadInteractionMessages.Create(components, ephemeral)));
+        InteractionTransactions.MarkResponded(Context.Interaction.Id);
+    }
 
-    protected Task FollowupThemedAsync(MessageComponent components) =>
-        FollowupAsync(ephemeral: true, components: components, flags: MessageFlags.ComponentsV2);
+    protected Task FollowupThemedAsync(IEnumerable<IMessageComponentProperties> components) =>
+        FollowupAsync(MadInteractionMessages.Create(components, ephemeral: true));
 
-    /// <summary>Replaces the message a button lives on.</summary>
-    protected Task UpdateThemedAsync(MessageComponent components) =>
-        ((SocketMessageComponent)Context.Interaction).UpdateAsync(message =>
+    protected async Task DeferThemedAsync()
+    {
+        await RespondAsync(InteractionCallback.DeferredMessage(MessageFlags.Ephemeral));
+        InteractionTransactions.MarkResponded(Context.Interaction.Id);
+    }
+}
+
+public abstract class MadComponentInteractionModule : ComponentInteractionModule<ButtonInteractionContext>
+{
+    protected async Task<ulong?> GetGuildIdAsync()
+    {
+        if (Context.Guild is { } guild)
         {
-            message.Components = components;
-            message.Flags = MessageFlags.ComponentsV2;
-        });
+            return guild.Id;
+        }
 
-    protected Task ModifyThemedAsync(MessageComponent components) =>
-        ModifyOriginalResponseAsync(message =>
+        await RespondThemedAsync(
+            MadTheme.ErrorMessage(
+                "I don't do house calls. Run this in the server whose channels you want me working on."
+            )
+        );
+        return null;
+    }
+
+    protected async Task<TextGuildChannel?> GetTextChannelAsync()
+    {
+        if (Context.Channel is TextGuildChannel channel)
         {
-            message.Components = components;
-            message.Flags = MessageFlags.ComponentsV2;
-        });
+            return channel;
+        }
+
+        await RespondThemedAsync(
+            MadTheme.ErrorMessage("I only work in text channels. Run this in the channel you want me to look after.")
+        );
+        return null;
+    }
+
+    protected async Task RespondThemedAsync(IEnumerable<IMessageComponentProperties> components, bool ephemeral = true)
+    {
+        await RespondAsync(InteractionCallback.Message(MadInteractionMessages.Create(components, ephemeral)));
+        InteractionTransactions.MarkResponded(Context.Interaction.Id);
+    }
+
+    protected async Task UpdateThemedAsync(IEnumerable<IMessageComponentProperties> components)
+    {
+        await RespondAsync(
+            InteractionCallback.ModifyMessage(message =>
+            {
+                message.Components = components;
+                message.Flags = MessageFlags.IsComponentsV2;
+            })
+        );
+        InteractionTransactions.MarkResponded(Context.Interaction.Id);
+    }
+}
+
+internal static class MadInteractionMessages
+{
+    public static InteractionMessageProperties Create(
+        IEnumerable<IMessageComponentProperties> components,
+        bool ephemeral
+    ) =>
+        new()
+        {
+            Components = components,
+            Flags = MessageFlags.IsComponentsV2 | (ephemeral ? MessageFlags.Ephemeral : default),
+        };
 }

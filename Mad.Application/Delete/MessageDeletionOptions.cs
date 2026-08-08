@@ -1,6 +1,6 @@
 using System.Globalization;
-using Discord;
 using Mad.Discord;
+using NetCord;
 
 namespace Mad.Delete;
 
@@ -31,8 +31,8 @@ public sealed record MessageDeletionOptions(TimeSpan OlderThan, DiscordUserType?
     }
 
     /// <summary>Lower case so callers can drop it into the middle of a sentence.</summary>
-    public string Describe(ITextChannel channel) =>
-        $"anything in {channel.Mention} {Describe(OlderThan, Target, IncludePins)}";
+    public string Describe(TextGuildChannel channel) =>
+        $"anything in {channel} {Describe(OlderThan, Target, IncludePins)}";
 
     public static string Describe(TimeSpan olderThan, DiscordUserType? target, bool includePins) =>
         $"older than **{MadFormat.Duration(olderThan)}**, from {MadFormat.Target(target)}, {MadFormat.Pins(includePins)}";

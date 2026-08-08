@@ -1,6 +1,4 @@
-using Discord;
-using Discord.Interactions;
-using Discord.WebSocket;
+using System.Reflection;
 using Mad.Database;
 using Mad.Delete;
 using Mad.Discord;
@@ -12,6 +10,14 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NetCord;
+using NetCord.Gateway;
+using NetCord.Hosting.Gateway;
+using NetCord.Hosting.Services;
+using NetCord.Hosting.Services.ApplicationCommands;
+using NetCord.Hosting.Services.ComponentInteractions;
+using NetCord.Services.ApplicationCommands;
+using NetCord.Services.ComponentInteractions;
 
 namespace Mad.Launch;
 
@@ -69,30 +75,51 @@ internal static class MadProgram
         var connectionString = new SqliteConnectionStringBuilder { DataSource = configuration.DatabasePath };
 
         builder.Services.AddSingleton(configuration);
-        builder.Services.AddSingleton<DiscordSocketClient>();
-        builder.Services.AddSingleton(serviceProvider => new InteractionService(
-            serviceProvider.GetRequiredService<DiscordSocketClient>(),
-            new InteractionServiceConfig
-            {
-                // Sync so ExecuteCommandAsync surfaces the real result; DiscordHostedService
-                // offloads each interaction to the thread pool to keep the gateway task free.
-                DefaultRunMode = RunMode.Sync,
-                AutoServiceScopes = true,
-            }
-        ));
-        builder.Services.AddSingleton(
-            new DiscordSocketConfig { GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMessages }
-        );
+        builder.Services.AddSingleton<CommandMentions>();
 
         builder.Services.AddDbContext<MadDbContext>(options => options.UseSqlite(connectionString.ConnectionString));
         builder.Services.AddScoped<AutoDeleteRuleService>();
         builder.Services.AddScoped<GuildSettingService>();
         builder.Services.AddSingleton<LogNotifier>();
 
+        // These services subscribe to gateway events before NetCord starts the connection.
         builder.Services.AddHostedService<MadDbHostedService>();
         builder.Services.AddHostedService<AutoDeleteHostedService>();
         builder.Services.AddHostedService<DiscordHostedService>();
 
-        await builder.Build().RunAsync();
+        builder.Services.AddDiscordGateway(options =>
+        {
+            options.Token = configuration.DiscordToken;
+            options.Intents = GatewayIntents.Guilds | GatewayIntents.GuildMessages;
+        });
+        builder.Services.AddApplicationCommands(options =>
+        {
+            options.AutoRegisterCommands = false;
+            options.TypeReaders[typeof(TimeSpan)] = new TimeSpanSlashCommandTypeReader();
+            options.PreExecutionHandler = new MadApplicationCommandPreExecutionHandler();
+            options.ResultHandler = new MadApplicationCommandResultHandler();
+        });
+        builder.Services.AddComponentInteractions<ButtonInteraction, ButtonInteractionContext>(options =>
+        {
+            options.ParameterSeparator = ',';
+            options.PreExecutionHandler = new MadComponentInteractionPreExecutionHandler();
+            options.ResultHandler = new MadComponentInteractionResultHandler();
+        });
+
+        var host = builder.Build();
+        host.AddModules(Assembly.GetExecutingAssembly());
+
+        var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+
+        try
+        {
+            await host.RunAsync();
+        }
+        catch (OperationCanceledException) when (lifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            // Ctrl+C can arrive while a hosted service is still starting. In that case the
+            // generic host reports startup cancellation through RunAsync even though the
+            // application is already performing a requested, graceful shutdown.
+        }
     }
 }

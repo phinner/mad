@@ -1,9 +1,10 @@
-using Discord;
-using Discord.WebSocket;
 using Mad.Discord;
 using Mad.Settings;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using NetCord;
+using NetCord.Gateway;
+using NetCord.Rest;
 
 namespace Mad.Log;
 
@@ -12,7 +13,8 @@ namespace Mad.Log;
 /// method swallows its failures: a broken log channel must never stop a sweep or a command.
 /// </summary>
 public sealed class LogNotifier(
-    DiscordSocketClient client,
+    GatewayClient client,
+    RestClient rest,
     IServiceScopeFactory scopeFactory,
     ILogger<LogNotifier> logger
 )
@@ -31,12 +33,16 @@ public sealed class LogNotifier(
 
     public Task NotifyConfigChangeAsync(
         ulong guildId,
-        IUser actor,
+        User actor,
         string text,
         CancellationToken cancellationToken = default
-    ) => NotifyAsync(guildId, MadTheme.InfoMessage($"{actor.Mention} {text}"), cancellationToken);
+    ) => NotifyAsync(guildId, MadTheme.InfoMessage($"{actor} {text}"), cancellationToken);
 
-    private async Task NotifyAsync(ulong guildId, MessageComponent components, CancellationToken cancellationToken)
+    private async Task NotifyAsync(
+        ulong guildId,
+        IEnumerable<IMessageComponentProperties> components,
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -48,16 +54,18 @@ public sealed class LogNotifier(
                 return;
             }
 
-            var guild = client.GetGuild(guildId);
-            if (guild is null)
+            var cache = client.Cache;
+            if (!cache.Guilds.TryGetValue(guildId, out var guild) || guild.IsUnavailable)
             {
                 // The guild may simply not be cached yet; leave the setting alone.
                 logger.LogDebug("Skipping log notification; guild {GuildId} is not available.", guildId);
                 return;
             }
 
-            var channel = guild.GetTextChannel(logChannelId);
-            if (channel is null)
+            if (
+                !guild.Channels.TryGetValue(logChannelId, out var cachedChannel)
+                || cachedChannel is not TextGuildChannel
+            )
             {
                 logger.LogWarning(
                     "Log channel {ChannelId} no longer exists in guild {GuildId}; clearing the setting.",
@@ -68,23 +76,37 @@ public sealed class LogNotifier(
                 return;
             }
 
-            var permissions = guild.CurrentUser.GetPermissions(channel);
-            if (!permissions.ViewChannel || !permissions.SendMessages)
+            var botId = cache.User?.Id;
+            if (botId is null || !guild.Users.TryGetValue(botId.Value, out var bot))
+            {
+                logger.LogWarning(
+                    "Skipping log notification; the bot user is not cached for guild {GuildId}.",
+                    guildId
+                );
+                return;
+            }
+
+            var permissions = bot.GetChannelPermissions(guild, logChannelId);
+            if (!permissions.HasFlag(Permissions.ViewChannel | Permissions.SendMessages))
             {
                 logger.LogWarning(
                     "Cannot post to log channel {ChannelId} in guild {GuildId}; clearing the setting.",
-                    channel.Id,
+                    logChannelId,
                     guildId
                 );
                 await settings.UpsertAsync(setting with { LogChannelId = null }, cancellationToken);
                 return;
             }
 
-            await channel.SendMessageAsync(
-                components: components,
-                flags: MessageFlags.ComponentsV2,
-                options: new RequestOptions { CancelToken = cancellationToken },
-                allowedMentions: AllowedMentions.None
+            await rest.SendMessageAsync(
+                logChannelId,
+                new MessageProperties
+                {
+                    Components = components,
+                    Flags = MessageFlags.IsComponentsV2,
+                    AllowedMentions = AllowedMentionsProperties.None,
+                },
+                cancellationToken: cancellationToken
             );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }

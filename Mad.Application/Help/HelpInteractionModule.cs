@@ -1,47 +1,38 @@
-using Discord;
-using Discord.Interactions;
-using Discord.WebSocket;
 using Mad.Delete;
 using Mad.Discord;
-using Mad.Launch;
 using Mad.Log;
+using NetCord;
+using NetCord.Gateway;
+using NetCord.Rest;
+using NetCord.Services;
+using NetCord.Services.ApplicationCommands;
 
 namespace Mad.Help;
 
-[RequireUserPermission(GuildPermission.ManageMessages)]
-public sealed class HelpInteractionModule(DiscordSocketClient discord, MadConfiguration configuration)
-    : MadInteractionModule
+[RequireUserPermissions<ApplicationCommandContext>(Permissions.ManageMessages)]
+public sealed class HelpInteractionModule(GatewayClient discord, CommandMentions commandMentions)
+    : MadApplicationCommandModule
 {
     [SlashCommand("help", "What I do, and the commands I take.")]
-    public async Task Help()
+    public Task Help()
     {
-        var commandIds = configuration.Debug
-            ? (await Context.Guild.GetApplicationCommandsAsync()).ToDictionary(
-                command => command.Name,
-                command => command.Id
-            )
-            : (await discord.GetGlobalApplicationCommandsAsync()).ToDictionary(
-                command => command.Name,
-                command => command.Id
-            );
+        var user = discord.Cache.User;
+        var avatarUrl = user?.GetAvatarUrl()?.ToString() ?? user?.DefaultAvatarUrl.ToString() ?? string.Empty;
 
-        await RespondThemedAsync(
+        return RespondThemedAsync(
             MadTheme.Message(
                 MadTheme.Info,
                 [
-                    new SectionBuilder()
-                        .WithAccessory(
-                            new ThumbnailBuilder(
-                                new UnfurledMediaItemProperties(Context.Client.CurrentUser.GetDisplayAvatarUrl())
-                            )
-                        )
-                        .AddComponent(
-                            new TextDisplayBuilder(
+                    new ComponentSectionProperties(
+                        new ComponentSectionThumbnailProperties(new ComponentMediaProperties(avatarUrl)),
+                        [
+                            new TextDisplayProperties(
                                 "# **M.A.D - Message Auto Delete**\nI delete messages. That's pretty much it."
-                            )
-                        ),
-                    new SeparatorBuilder(spacing: SeparatorSpacingSize.Large),
-                    new TextDisplayBuilder(
+                            ),
+                        ]
+                    ),
+                    new ComponentSeparatorProperties { Spacing = ComponentSeparatorSpacingSize.Large },
+                    new TextDisplayProperties(
                         $"""
                         {Mention("autodelete", "enable")}
                         > {AutoDeleteInteractionModule.EnableDescription}
@@ -59,26 +50,23 @@ public sealed class HelpInteractionModule(DiscordSocketClient discord, MadConfig
                         > {LogInteractionModule.DisableDescription}
                         """
                     ),
-                    new SeparatorBuilder(spacing: SeparatorSpacingSize.Large),
-                    new TextDisplayBuilder(
+                    new ComponentSeparatorProperties { Spacing = ComponentSeparatorSpacingSize.Large },
+                    new TextDisplayProperties(
                         "-# Every command needs the **Manage Messages** permission, and I need **View Channel**, "
                             + "**Read Message History** and **Manage Messages** in the channels I look after."
                     ),
-                    new ActionRowBuilder().AddComponent(
-                        ButtonBuilder.CreateLinkButton("Source Code & Support", "https://github.com/phinner/mad")
-                    ),
+                    new ActionRowProperties([
+                        new LinkButtonProperties("https://github.com/phinner/mad", "Source Code & Support"),
+                    ]),
                 ]
             ),
             ephemeral: false
         );
-        return;
 
-        // Global commands take a while to propagate after a deploy, so fall back to plain text
-        // rather than throwing when Discord has not caught up yet.
         string Mention(string command, string? subcommand = null)
         {
             var path = subcommand is null ? command : $"{command} {subcommand}";
-            return commandIds.TryGetValue(command, out var commandId) ? $"</{path}:{commandId}>" : $"`/{path}`";
+            return commandMentions.TryGetId(command, out var commandId) ? $"</{path}:{commandId}>" : $"`/{path}`";
         }
     }
 }

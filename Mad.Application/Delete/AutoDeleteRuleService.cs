@@ -61,17 +61,39 @@ public sealed class AutoDeleteRuleService(MadDbContext db, MadConfiguration conf
             .ToListAsync(cancellationToken);
     }
 
-    /// <summary>
-    /// Materialised rather than streamed: the caller works through Discord's API for every guild it
-    /// gets back, and holding a reader open for that long would pin the connection to the sweep.
-    /// </summary>
-    public async Task<IReadOnlyList<ulong>> SelectGuildsWithRulesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<AutoDeleteRule>> SelectAllAsync(
+        int limit,
+        AutoDeleteRule? cursor = null,
+        CancellationToken cancellationToken = default
+    )
     {
-        return await db
-            .AutoDeleteRules.AsNoTracking()
-            .Select(rule => rule.GuildId)
-            .Distinct()
-            .ToListAsync(cancellationToken);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        // SQLite cannot translate ordering comparisons for ulong. Keep the keyset query in SQL;
+        // Discord snowflakes are stored as INTEGER and the composite primary key supplies the order.
+
+        // TODO I have the feeling the clanker is hallucinating... but meh, we love raw SQL...
+        var query = cursor is null
+            ? db.AutoDeleteRules.FromSqlInterpolated(
+                $"""
+                SELECT "GuildId", "ChannelId", "OlderThan", "TargetUserType", "IncludePins"
+                FROM "AutoDeleteRules"
+                ORDER BY "GuildId", "ChannelId"
+                LIMIT {limit}
+                """
+            )
+            : db.AutoDeleteRules.FromSqlInterpolated(
+                $"""
+                SELECT "GuildId", "ChannelId", "OlderThan", "TargetUserType", "IncludePins"
+                FROM "AutoDeleteRules"
+                WHERE "GuildId" > {cursor.GuildId}
+                   OR ("GuildId" = {cursor.GuildId} AND "ChannelId" > {cursor.ChannelId})
+                ORDER BY "GuildId", "ChannelId"
+                LIMIT {limit}
+                """
+            );
+
+        return await query.AsNoTracking().ToListAsync(cancellationToken);
     }
 
     public Task<int> DeleteByGuildAndChannelAsync(
