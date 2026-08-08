@@ -1,7 +1,6 @@
 using Discord;
 using Discord.WebSocket;
 using Mad.Discord;
-using Mad.Observability;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -90,7 +89,7 @@ internal sealed class DeletionRuleHostedService(
     )
     {
         var span = parent.StartChild("job.deletion.guild", $"guild {guildId}");
-        MadTelemetry.ScannedGuilds.Add(1);
+        SentrySdk.Metrics.EmitCounter("mad.deletion.guilds.scanned", 1L);
         try
         {
             var guild = client.GetGuild(guildId);
@@ -98,7 +97,7 @@ internal sealed class DeletionRuleHostedService(
             var rules = scope.ServiceProvider.GetRequiredService<DeletionRuleService>();
             if (guild is null)
             {
-                MadTelemetry.StaleGuilds.Add(1);
+                SentrySdk.Metrics.EmitCounter("mad.deletion.guilds.stale", 1L);
                 span.Status = SpanStatus.NotFound;
                 var deletedRules = await rules.DeleteByGuildAsync(guildId, cancellationToken);
                 logger.LogWarning(
@@ -165,7 +164,7 @@ internal sealed class DeletionRuleHostedService(
     )
     {
         var span = parent.StartChild("job.deletion.channel", $"channel {channelId}");
-        MadTelemetry.ScannedChannels.Add(1);
+        SentrySdk.Metrics.EmitCounter("mad.deletion.channels.scanned", 1L);
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
@@ -173,7 +172,7 @@ internal sealed class DeletionRuleHostedService(
             ITextChannel? channel = guild.GetTextChannel(channelId);
             if (channel is null)
             {
-                MadTelemetry.StaleChannels.Add(1);
+                SentrySdk.Metrics.EmitCounter("mad.deletion.channels.stale", 1L);
                 span.Status = SpanStatus.NotFound;
                 var deletedRules = await service.DeleteByGuildAndChannelAsync(
                     guild.Id,
@@ -238,8 +237,8 @@ internal sealed class DeletionRuleHostedService(
                 cancellationToken
             );
 
-            MadTelemetry.ScannedMessages.Add(scanned);
-            MadTelemetry.DeletedMessages.Add(deleted);
+            SentrySdk.Metrics.EmitCounter("mad.deletion.messages.scanned", scanned);
+            SentrySdk.Metrics.EmitCounter("mad.deletion.messages.deleted", deleted);
             span.SetData("messages.scanned", scanned);
             span.SetData("messages.deleted", deleted);
             span.Status = SpanStatus.Ok;

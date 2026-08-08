@@ -64,6 +64,7 @@ internal static class MadProgram
                 options.Dsn = configuration.SentryDsn;
                 options.Debug = configuration.Debug;
                 options.EnableLogs = true;
+                options.EnableMetrics = true;
                 options.TracesSampleRate = 1.0;
             });
         }
