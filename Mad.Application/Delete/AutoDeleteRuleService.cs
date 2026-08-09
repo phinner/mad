@@ -76,7 +76,7 @@ public sealed class AutoDeleteRuleService(MadDbContext db, MadConfiguration conf
         var query = cursor is null
             ? db.AutoDeleteRules.FromSqlInterpolated(
                 $"""
-                SELECT "GuildId", "ChannelId", "OlderThan", "TargetUserType", "IncludePins"
+                SELECT "GuildId", "ChannelId", "OlderThan", "TargetUserType", "IncludePins", "Accessible"
                 FROM "AutoDeleteRules"
                 ORDER BY "GuildId", "ChannelId"
                 LIMIT {limit}
@@ -84,7 +84,7 @@ public sealed class AutoDeleteRuleService(MadDbContext db, MadConfiguration conf
             )
             : db.AutoDeleteRules.FromSqlInterpolated(
                 $"""
-                SELECT "GuildId", "ChannelId", "OlderThan", "TargetUserType", "IncludePins"
+                SELECT "GuildId", "ChannelId", "OlderThan", "TargetUserType", "IncludePins", "Accessible"
                 FROM "AutoDeleteRules"
                 WHERE "GuildId" > {cursor.GuildId}
                    OR ("GuildId" = {cursor.GuildId} AND "ChannelId" > {cursor.ChannelId})
@@ -95,6 +95,16 @@ public sealed class AutoDeleteRuleService(MadDbContext db, MadConfiguration conf
 
         return await query.AsNoTracking().ToListAsync(cancellationToken);
     }
+
+    public Task<int> SetAccessibleAsync(
+        ulong guildId,
+        ulong channelId,
+        RuleAccessibility accessible,
+        CancellationToken cancellationToken = default
+    ) =>
+        db
+            .AutoDeleteRules.Where(rule => rule.GuildId == guildId && rule.ChannelId == channelId)
+            .ExecuteUpdateAsync(rule => rule.SetProperty(r => r.Accessible, accessible), cancellationToken);
 
     public Task<int> DeleteByGuildAndChannelAsync(
         ulong guildId,

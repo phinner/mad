@@ -9,5 +9,6 @@ public sealed record AutoDeleteRule(
     ulong ChannelId,
     TimeSpan OlderThan,
     DiscordUserType? TargetUserType,
-    bool IncludePins
+    bool IncludePins,
+    RuleAccessibility Accessible = RuleAccessibility.Yes
 );

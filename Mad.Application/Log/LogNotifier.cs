@@ -15,7 +15,7 @@ public sealed class LogNotifier(
     ILogger<LogNotifier> logger
 )
 {
-    public Task NotifySweepAsync(
+    public Task<bool> NotifySweepAsync(
         ulong guildId,
         ulong channelId,
         int deleted,
@@ -27,14 +27,29 @@ public sealed class LogNotifier(
             cancellationToken
         );
 
-    public Task NotifyConfigChangeAsync(
+    public Task<bool> NotifyConfigChangeAsync(
         ulong guildId,
         User actor,
         string text,
         CancellationToken cancellationToken = default
     ) => NotifyAsync(guildId, MadTheme.InfoMessage($"{actor} {text}"), cancellationToken);
 
-    private async Task NotifyAsync(
+    public Task<bool> NotifyInaccessibleAsync(
+        ulong guildId,
+        ulong channelId,
+        CancellationToken cancellationToken = default
+    ) =>
+        NotifyAsync(
+            guildId,
+            MadTheme.ErrorMessage(
+                $"I've had to leave <#{channelId}> alone: I no longer have what I need to sweep it. "
+                    + $"Give me {MadPermissions.Describe(MadPermissions.AutoDelete)} there and I'll pick it back up "
+                    + "on my next round, or run `/autodelete disable` in it to take it off my round for good."
+            ),
+            cancellationToken
+        );
+
+    private async Task<bool> NotifyAsync(
         ulong guildId,
         IEnumerable<IMessageComponentProperties> components,
         CancellationToken cancellationToken
@@ -47,7 +62,7 @@ public sealed class LogNotifier(
             var setting = await settings.SelectAsync(guildId, cancellationToken);
             if (setting?.LogChannelId is not { } logChannelId)
             {
-                return;
+                return false;
             }
 
             var cache = client.Cache;
@@ -55,7 +70,7 @@ public sealed class LogNotifier(
             {
                 // The guild may simply not be cached yet; leave the setting alone.
                 logger.LogDebug("Skipping log notification; guild {GuildId} is not available.", guildId);
-                return;
+                return false;
             }
 
             if (
@@ -69,7 +84,7 @@ public sealed class LogNotifier(
                     guildId
                 );
                 await settings.UpsertAsync(setting with { LogChannelId = null }, cancellationToken);
-                return;
+                return false;
             }
 
             var botId = cache.User?.Id;
@@ -79,11 +94,11 @@ public sealed class LogNotifier(
                     "Skipping log notification; the bot user is not cached for guild {GuildId}.",
                     guildId
                 );
-                return;
+                return false;
             }
 
             var permissions = bot.GetChannelPermissions(guild, logChannelId);
-            if (!permissions.HasFlag(Permissions.ViewChannel | Permissions.SendMessages))
+            if (!permissions.HasFlag(MadPermissions.Log))
             {
                 logger.LogWarning(
                     "Cannot post to log channel {ChannelId} in guild {GuildId}; clearing the setting.",
@@ -91,7 +106,7 @@ public sealed class LogNotifier(
                     guildId
                 );
                 await settings.UpsertAsync(setting with { LogChannelId = null }, cancellationToken);
-                return;
+                return false;
             }
 
             await rest.SendMessageAsync(
@@ -104,11 +119,16 @@ public sealed class LogNotifier(
                 },
                 cancellationToken: cancellationToken
             );
+            return true;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Could not send a log notification for guild {GuildId}.", guildId);
+            return false;
         }
     }
 

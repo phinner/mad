@@ -29,15 +29,17 @@ public sealed class LogInteractionModule(GuildSettingsService settings, LogNotif
             return;
         }
 
-        var permissions = Context.Interaction.AppPermissions;
-        if (!permissions.HasFlag(Permissions.ViewChannel | Permissions.SendMessages))
+        if (
+            MadPermissions.MissingMessage(
+                Context.Interaction.AppPermissions,
+                MadPermissions.Log,
+                channel,
+                "file anything there"
+            ) is
+            { } missing
+        )
         {
-            await RespondThemedAsync(
-                MadTheme.ErrorMessage(
-                    $"I need **View Channel** and **Send Messages** in {channel} before I can file "
-                        + "anything there. Grant those and run this again."
-                )
-            );
+            await RespondThemedAsync(missing);
             return;
         }
 

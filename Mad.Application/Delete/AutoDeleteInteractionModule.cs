@@ -49,6 +49,20 @@ public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, Log
             return;
         }
 
+        if (
+            MadPermissions.MissingMessage(
+                Context.Interaction.AppPermissions,
+                MadPermissions.AutoDelete,
+                channel,
+                "put it on my round"
+            ) is
+            { } missing
+        )
+        {
+            await RespondThemedAsync(missing);
+            return;
+        }
+
         if (!MessageDeletionService.IsValidOlderThan(olderThan))
         {
             await RespondThemedAsync(
@@ -139,6 +153,20 @@ public sealed class AutoDeleteComponentInteractionModule(AutoDeleteRuleService r
             return;
         }
 
+        if (
+            MadPermissions.MissingMessage(
+                Context.Interaction.AppPermissions,
+                MadPermissions.AutoDelete,
+                channel,
+                "put it on my round"
+            ) is
+            { } missing
+        )
+        {
+            await UpdateThemedAsync(missing);
+            return;
+        }
+
         var options = MessageDeletionOptions.FromCustomIdArguments(minutes, target, includePins);
         if (options is null)
         {
@@ -221,7 +249,10 @@ internal static class AutoDeleteList
         int requestedPage
     )
     {
-        var guildRules = (await rules.SelectByGuildAsync(guildId)).OrderBy(rule => rule.ChannelId).ToArray();
+        var guildRules = (await rules.SelectByGuildAsync(guildId))
+            .OrderBy(rule => rule.Accessible is RuleAccessibility.Yes)
+            .ThenBy(rule => rule.ChannelId)
+            .ToArray();
 
         if (guildRules.Length == 0)
         {
@@ -232,18 +263,23 @@ internal static class AutoDeleteList
 
         var pageCount = (int)Math.Ceiling(guildRules.Length / (double)RulesPerPage);
         var page = Math.Clamp(requestedPage, 0, pageCount - 1);
-        var lines = guildRules
-            .Skip(page * RulesPerPage)
-            .Take(RulesPerPage)
-            .Select(rule =>
-                $"<#{rule.ChannelId}> - {MessageDeletionOptions.Describe(rule.OlderThan, rule.TargetUserType, rule.IncludePins)}."
-            );
+        var pageRules = guildRules.Skip(page * RulesPerPage).Take(RulesPerPage).ToArray();
+        var lines = pageRules.Select(rule =>
+        {
+            var settings = MessageDeletionOptions.Describe(rule.OlderThan, rule.TargetUserType, rule.IncludePins);
+            return rule.Accessible is RuleAccessibility.Yes
+                ? $"<#{rule.ChannelId}> - {settings}."
+                : $"⚠️ <#{rule.ChannelId}> - **left alone**, I can't get at it - {settings}.";
+        });
 
         var count = guildRules.Length == 1 ? "1 channel" : $"{guildRules.Length} channels";
         var pageLabel = pageCount > 1 ? $" - page {page + 1}/{pageCount}" : string.Empty;
+        var blocked = pageRules.Any(rule => rule.Accessible is not RuleAccessibility.Yes)
+            ? $"\n-# ⚠️ I need {MadPermissions.Describe(MadPermissions.AutoDelete)} in a channel to sweep it.\n"
+            : string.Empty;
 
         return MadTheme.InfoMessage(
-            $"### **On my round** - {count}{pageLabel}\n{string.Join('\n', lines)}\n",
+            $"### **On my round** - {count}{pageLabel}\n{string.Join('\n', lines)}\n{blocked}",
             MadTheme.PageButton("Previous", $"mad:v0:autodelete-list,{page - 1}", page == 0),
             MadTheme.PageButton("Next", $"mad:v0:autodelete-list,{page + 1}", page == pageCount - 1)
         );

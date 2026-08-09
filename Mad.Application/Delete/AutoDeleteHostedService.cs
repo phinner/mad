@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using Mad.Discord;
 using Mad.Launch;
 using Mad.Log;
 using Mad.Settings;
@@ -213,6 +214,34 @@ internal sealed class AutoDeleteHostedService(
                 return;
             }
 
+            if (!CanSweep(cache, guild, channelId))
+            {
+                SentrySdk.Metrics.EmitCounter("mad.deletion.channels.forbidden", 1L);
+                span.Status = SpanStatus.PermissionDenied;
+                if (rule.Accessible is RuleAccessibility.Yes)
+                {
+                    logger.LogWarning(
+                        "Skipping channel {ChannelId} in guild {GuildId}; I no longer have the permissions to sweep it.",
+                        channelId,
+                        guildId
+                    );
+                }
+
+                // The rule stays: the round picks the channel back up once the permissions come back.
+                await MarkInaccessibleAsync(rule, cancellationToken);
+                return;
+            }
+
+            if (rule.Accessible is not RuleAccessibility.Yes)
+            {
+                await SetAccessibleAsync(guildId, channelId, RuleAccessibility.Yes, cancellationToken);
+                logger.LogInformation(
+                    "Channel {ChannelId} in guild {GuildId} is back within reach; resuming its sweeps.",
+                    channelId,
+                    guildId
+                );
+            }
+
             var (scanned, deleted) = await MessageDeletionService.SweepAsync(
                 rest,
                 channelId,
@@ -262,6 +291,41 @@ internal sealed class AutoDeleteHostedService(
         {
             span.Finish();
         }
+    }
+
+    private static bool CanSweep(IGatewayClientCache cache, Guild guild, ulong channelId) =>
+        cache.User?.Id is { } botId
+        && guild.Users.TryGetValue(botId, out var bot)
+        && bot.GetChannelPermissions(guild, channelId).HasFlag(MadPermissions.AutoDelete);
+
+    private async ValueTask MarkInaccessibleAsync(AutoDeleteRule rule, CancellationToken cancellationToken)
+    {
+        if (rule.Accessible is RuleAccessibility.NoAndNotified)
+        {
+            return;
+        }
+
+        if (rule.Accessible is RuleAccessibility.Yes)
+        {
+            await SetAccessibleAsync(rule.GuildId, rule.ChannelId, RuleAccessibility.No, cancellationToken);
+        }
+
+        if (await notifier.NotifyInaccessibleAsync(rule.GuildId, rule.ChannelId, cancellationToken))
+        {
+            await SetAccessibleAsync(rule.GuildId, rule.ChannelId, RuleAccessibility.NoAndNotified, cancellationToken);
+        }
+    }
+
+    private async ValueTask SetAccessibleAsync(
+        ulong guildId,
+        ulong channelId,
+        RuleAccessibility accessible,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var rules = scope.ServiceProvider.GetRequiredService<AutoDeleteRuleService>();
+        await rules.SetAccessibleAsync(guildId, channelId, accessible, cancellationToken);
     }
 
     private async Task<int> ForgetGuildSettingsAsync(ulong guildId, CancellationToken cancellationToken = default)
