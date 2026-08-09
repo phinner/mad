@@ -8,5 +8,5 @@ public sealed class MadDbContext(DbContextOptions<MadDbContext> options) : DbCon
 {
     public DbSet<AutoDeleteRule> AutoDeleteRules => Set<AutoDeleteRule>();
 
-    public DbSet<GuildSetting> GuildSettings => Set<GuildSetting>();
+    public DbSet<GuildSettings> GuildSettings => Set<GuildSettings>();
 }

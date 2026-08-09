@@ -8,7 +8,7 @@ namespace Mad.Log;
 
 [SlashCommand("logchannel", "Choose where I file my reports.")]
 [RequireUserPermissions<ApplicationCommandContext>(Permissions.ManageMessages)]
-public sealed class LogInteractionModule(GuildSettingService settings, LogNotifier notifier)
+public sealed class LogInteractionModule(GuildSettingsService settings, LogNotifier notifier)
     : MadApplicationCommandModule
 {
     internal const string EnableDescription = "I post my sweep summaries and any setting changes in this channel.";
@@ -41,7 +41,7 @@ public sealed class LogInteractionModule(GuildSettingService settings, LogNotifi
             return;
         }
 
-        await settings.UpsertAsync(new GuildSetting(guildId.Value, channel.Id));
+        await settings.UpsertAsync(new GuildSettings(guildId.Value, channel.Id));
         await RespondThemedAsync(
             MadTheme.SuccessMessage(
                 $"Right, reports go in {channel} from now on: a summary after every sweep that deletes "

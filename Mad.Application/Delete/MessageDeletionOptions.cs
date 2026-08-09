@@ -13,7 +13,6 @@ public sealed record MessageDeletionOptions(TimeSpan OlderThan, DiscordUserType?
             $"{(int)OlderThan.TotalMinutes},{(Target is { } target ? (int)target : -1)},{(IncludePins ? 1 : 0)}"
         );
 
-    /// <summary>Returns null when the encoded options no longer describe a legal sweep.</summary>
     public static MessageDeletionOptions? FromCustomIdArguments(int minutes, int target, int includePins)
     {
         var olderThan = TimeSpan.FromMinutes(minutes);

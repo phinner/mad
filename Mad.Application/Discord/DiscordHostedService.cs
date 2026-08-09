@@ -7,7 +7,6 @@ using NetCord.Services.ApplicationCommands;
 
 namespace Mad.Discord;
 
-/// <summary>Registers commands after Discord identifies the application.</summary>
 internal sealed class DiscordHostedService(
     GatewayClient client,
     RestClient rest,

@@ -8,10 +8,6 @@ using NetCord.Rest;
 
 namespace Mad.Log;
 
-/// <summary>
-/// Reports work and configuration changes to the guild's log channel, when it has one. Every
-/// method swallows its failures: a broken log channel must never stop a sweep or a command.
-/// </summary>
 public sealed class LogNotifier(
     GatewayClient client,
     RestClient rest,
@@ -47,7 +43,7 @@ public sealed class LogNotifier(
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
-            var settings = scope.ServiceProvider.GetRequiredService<GuildSettingService>();
+            var settings = scope.ServiceProvider.GetRequiredService<GuildSettingsService>();
             var setting = await settings.SelectAsync(guildId, cancellationToken);
             if (setting?.LogChannelId is not { } logChannelId)
             {

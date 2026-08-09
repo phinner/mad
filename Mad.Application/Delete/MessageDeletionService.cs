@@ -4,22 +4,17 @@ using NetCord.Rest;
 
 namespace Mad.Delete;
 
-/// <summary>Deletes the messages in a channel that a set of sweep options selects.</summary>
 public static class MessageDeletionService
 {
     /// <summary>Discord refuses to bulk delete anything older than this.</summary>
-    public static readonly TimeSpan BulkDeletionWindow = TimeSpan.FromDays(14);
+    private static readonly TimeSpan BulkDeletionWindow = TimeSpan.FromDays(14);
 
-    public static readonly TimeSpan MinimumOlderThan = TimeSpan.FromMinutes(1);
-    public static readonly TimeSpan MaximumOlderThan = TimeSpan.FromDays(12);
+    private static readonly TimeSpan MinimumOlderThan = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan MaximumOlderThan = TimeSpan.FromDays(12);
 
     private const string AuditLogReason = "Mad automated message deletion";
     private const int DeleteBatchSize = 100;
 
-    /// <summary>
-    /// Whole minutes between <see cref="MinimumOlderThan"/> and <see cref="MaximumOlderThan"/>;
-    /// the upper bound leaves room under <see cref="BulkDeletionWindow"/> for a sweep to catch up.
-    /// </summary>
     public static bool IsValidOlderThan(TimeSpan olderThan) =>
         olderThan >= MinimumOlderThan
         && olderThan <= MaximumOlderThan

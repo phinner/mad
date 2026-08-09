@@ -4,12 +4,10 @@ using Mad.Log;
 using NetCord;
 using NetCord.Gateway;
 using NetCord.Rest;
-using NetCord.Services;
 using NetCord.Services.ApplicationCommands;
 
 namespace Mad.Help;
 
-[RequireUserPermissions<ApplicationCommandContext>(Permissions.ManageMessages)]
 public sealed class HelpInteractionModule(GatewayClient discord, CommandMentions commandMentions)
     : MadApplicationCommandModule
 {

@@ -60,7 +60,7 @@ internal sealed class AutoDeleteHostedService(
 
         try
         {
-            var deletedRules = await ForgetGuildConfigurationAsync(guild.GuildId);
+            var deletedRules = await ForgetGuildSettingsAsync(guild.GuildId);
             logger.LogInformation(
                 "Left guild {GuildId}; removed {RuleCount} rules and its settings.",
                 guild.GuildId,
@@ -85,9 +85,7 @@ internal sealed class AutoDeleteHostedService(
             return;
         }
 
-        // Own scope: interactions run concurrently with this job and would otherwise overwrite each
-        // other's transaction on the shared one.
-        using var sentryScope = SentrySdk.PushScope();
+        using var deleteJobScope = SentrySdk.PushScope();
         var transaction = SentrySdk.StartTransaction("deletion-rule-job", "job.deletion");
         SentrySdk.ConfigureScope(scope => scope.Transaction = transaction);
         try
@@ -107,7 +105,6 @@ internal sealed class AutoDeleteHostedService(
                     break;
                 }
 
-                // Capture this before workers can delete the cursor row or its entire guild.
                 cursor = batch[^1];
                 var cache = client.Cache;
 
@@ -176,7 +173,7 @@ internal sealed class AutoDeleteHostedService(
                 }
                 catch (RestException exception) when (exception.StatusCode is HttpStatusCode.NotFound)
                 {
-                    var deletedRules = await ForgetGuildConfigurationAsync(guildId, cancellationToken);
+                    var deletedRules = await ForgetGuildSettingsAsync(guildId, cancellationToken);
                     span.Status = SpanStatus.NotFound;
                     logger.LogWarning(
                         "Discord no longer has guild {GuildId}; removed {RuleCount} rules and its settings.",
@@ -267,11 +264,11 @@ internal sealed class AutoDeleteHostedService(
         }
     }
 
-    private async Task<int> ForgetGuildConfigurationAsync(ulong guildId, CancellationToken cancellationToken = default)
+    private async Task<int> ForgetGuildSettingsAsync(ulong guildId, CancellationToken cancellationToken = default)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var rules = scope.ServiceProvider.GetRequiredService<AutoDeleteRuleService>();
-        var settings = scope.ServiceProvider.GetRequiredService<GuildSettingService>();
+        var settings = scope.ServiceProvider.GetRequiredService<GuildSettingsService>();
         await settings.DeleteAsync(guildId, cancellationToken);
         return await rules.DeleteByGuildAsync(guildId, cancellationToken);
     }

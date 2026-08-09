@@ -79,10 +79,9 @@ internal static class MadProgram
 
         builder.Services.AddDbContext<MadDbContext>(options => options.UseSqlite(connectionString.ConnectionString));
         builder.Services.AddScoped<AutoDeleteRuleService>();
-        builder.Services.AddScoped<GuildSettingService>();
+        builder.Services.AddScoped<GuildSettingsService>();
         builder.Services.AddSingleton<LogNotifier>();
 
-        // These services subscribe to gateway events before NetCord starts the connection.
         builder.Services.AddHostedService<MadDbHostedService>();
         builder.Services.AddHostedService<AutoDeleteHostedService>();
         builder.Services.AddHostedService<DiscordHostedService>();
@@ -109,17 +108,6 @@ internal static class MadProgram
         var host = builder.Build();
         host.AddModules(Assembly.GetExecutingAssembly());
 
-        var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
-
-        try
-        {
-            await host.RunAsync();
-        }
-        catch (OperationCanceledException) when (lifetime.ApplicationStopping.IsCancellationRequested)
-        {
-            // Ctrl+C can arrive while a hosted service is still starting. In that case the
-            // generic host reports startup cancellation through RunAsync even though the
-            // application is already performing a requested, graceful shutdown.
-        }
+        await host.RunAsync();
     }
 }
