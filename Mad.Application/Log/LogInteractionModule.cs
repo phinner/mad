@@ -17,13 +17,13 @@ public sealed class LogInteractionModule(GuildSettingsService settings, LogNotif
     [SubSlashCommand("enable", EnableDescription)]
     public async Task Enable()
     {
-        var guildId = await GetGuildIdAsync();
+        var guildId = await Context.GetGuildIdAsync();
         if (guildId is null)
         {
             return;
         }
 
-        var channel = await GetTextChannelAsync();
+        var channel = await Context.GetTextChannelAsync();
         if (channel is null)
         {
             return;
@@ -54,7 +54,7 @@ public sealed class LogInteractionModule(GuildSettingsService settings, LogNotif
     [SubSlashCommand("disable", DisableDescription)]
     public async Task Disable()
     {
-        var guildId = await GetGuildIdAsync();
+        var guildId = await Context.GetGuildIdAsync();
         if (guildId is null)
         {
             return;

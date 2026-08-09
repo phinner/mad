@@ -37,13 +37,13 @@ public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, Log
             bool includePins = false
     )
     {
-        var guildId = await GetGuildIdAsync();
+        var guildId = await Context.GetGuildIdAsync();
         if (guildId is null)
         {
             return;
         }
 
-        var channel = await GetTextChannelAsync();
+        var channel = await Context.GetTextChannelAsync();
         if (channel is null)
         {
             return;
@@ -74,13 +74,13 @@ public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, Log
     [SubSlashCommand("disable", DisableDescription)]
     public async Task Disable()
     {
-        var guildId = await GetGuildIdAsync();
+        var guildId = await Context.GetGuildIdAsync();
         if (guildId is null)
         {
             return;
         }
 
-        var channel = await GetTextChannelAsync();
+        var channel = await Context.GetTextChannelAsync();
         if (channel is null)
         {
             return;
@@ -108,7 +108,7 @@ public sealed class AutoDeleteInteractionModule(AutoDeleteRuleService rules, Log
     [SubSlashCommand("list", ListDescription)]
     public async Task List()
     {
-        var guildId = await GetGuildIdAsync();
+        var guildId = await Context.GetGuildIdAsync();
         if (guildId is null)
         {
             return;
@@ -127,13 +127,13 @@ public sealed class AutoDeleteComponentInteractionModule(AutoDeleteRuleService r
     [ComponentInteraction("mad:v0:autodelete:confirm")]
     public async Task ConfirmEnable(int minutes, int target, int includePins)
     {
-        var guildId = await GetGuildIdAsync();
+        var guildId = await Context.GetGuildIdAsync();
         if (guildId is null)
         {
             return;
         }
 
-        var channel = await GetTextChannelAsync();
+        var channel = await Context.GetTextChannelAsync();
         if (channel is null)
         {
             return;
@@ -201,7 +201,7 @@ public sealed class AutoDeleteComponentInteractionModule(AutoDeleteRuleService r
     [ComponentInteraction("mad:v0:autodelete-list")]
     public async Task ListPage(int page)
     {
-        var guildId = await GetGuildIdAsync();
+        var guildId = await Context.GetGuildIdAsync();
         if (guildId is null)
         {
             return;

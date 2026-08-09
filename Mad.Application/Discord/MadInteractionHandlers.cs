@@ -9,7 +9,6 @@ using NetCord.Rest;
 using NetCord.Services;
 using NetCord.Services.ApplicationCommands;
 using NetCord.Services.ComponentInteractions;
-using Sentry;
 
 namespace Mad.Discord;
 
@@ -137,7 +136,11 @@ internal static class InteractionResults
             }
 
             var body = failure is PreconditionFailResult ? failure.Message : GenericFailure;
-            var message = MadInteractionMessages.Create(MadTheme.ErrorMessage(body), ephemeral: true);
+            var message = new InteractionMessageProperties
+            {
+                Components = MadTheme.ErrorMessage(body),
+                Flags = MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+            };
             if (responded)
             {
                 await interaction.SendFollowupMessageAsync(message);
